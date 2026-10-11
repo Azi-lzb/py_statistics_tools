@@ -17,3 +17,4 @@ tmp_*/
 # 本地杂项
 cache/
 .vscode/
+.pyi_runtime_tmp/

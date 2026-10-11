@@ -13,6 +13,11 @@ from .logger import get_logger
 
 
 _INVALID_SHEET_CHARS = re.compile(r"[:\\/?*\[\]]")
+_CELL_RE = re.compile(r"^([A-Za-z]+)(\d+)$")
+_CELL_RANGE_RE = re.compile(r"^([A-Za-z]+)(\d+):([A-Za-z]+)(\d+)$")
+_COL_RANGE_RE = re.compile(r"^([A-Za-z]+):([A-Za-z]+)$")
+_ROW_RANGE_RE = re.compile(r"^(\d+):(\d+)$")
+_FULL_AREA_WORDS = {"", "整表", "全部", "全表"}
 
 
 def _normalize_range_spec(text: str) -> str:
@@ -106,6 +111,56 @@ def _find_matched_sheets(wb, keywords: list[str]) -> list:
     return matched
 
 
+def _split_keyword_groups(text: str) -> list[list[str]]:
+    if not text:
+        return []
+    groups = []
+    normalized = str(text).replace("；", ";")
+    for group_text in normalized.split(";"):
+        options = []
+        for option in re.split(r"[,，|]", group_text):
+            option = option.strip()
+            if option:
+                options.append(option)
+        if options:
+            groups.append(options)
+    return groups
+
+
+def _name_matches_keyword_options(name: str, keyword_text: str) -> bool:
+    groups = _split_keyword_groups(keyword_text)
+    if not groups:
+        return True
+    name_low = name.lower()
+    return all(any(option.lower() in name_low for option in group) for group in groups)
+
+
+def _workbook_matches(src: Path, task: dict) -> bool:
+    return _name_matches_keyword_options(src.name, str(task.get("workbook_keywords") or ""))
+
+
+def _name_matches_exclude(name: str, task: dict) -> bool:
+    exclude_keywords = str(task.get("exclude_keywords") or "")
+    if not exclude_keywords.strip():
+        return False
+    return _name_matches_keyword_options(name, exclude_keywords)
+
+
+def _find_matched_sheets_for_task(wb, task: dict) -> list:
+    sheet_keywords = str(task.get("sheet_keywords") or "")
+    matched = []
+    seen: set[str] = set()
+    for ws in wb.worksheets:
+        if ws.title in seen:
+            continue
+        if _name_matches_exclude(ws.title, task):
+            continue
+        if _name_matches_keyword_options(ws.title, sheet_keywords):
+            matched.append(ws)
+            seen.add(ws.title)
+    return matched
+
+
 def _sanitize_sheet_name(name: str) -> str:
     cleaned = _INVALID_SHEET_CHARS.sub("_", name)
     return cleaned[:31] if len(cleaned) > 31 else cleaned
@@ -156,6 +211,126 @@ def _extract_values(data: list[list], rows_spec: str, cols_spec: str,
     return out
 
 
+def _is_full_area_spec(area_spec: str) -> bool:
+    return str(area_spec or "").strip() in _FULL_AREA_WORDS
+
+
+def _split_area_specs(area_spec: str) -> list[str]:
+    text = str(area_spec or "").strip()
+    if _is_full_area_spec(text):
+        return [""]
+    parts = [part.strip() for part in text.replace("；", ";").split(";") if part.strip()]
+    return parts or [""]
+
+
+def _cell_to_row_col(token: str) -> tuple[int, int] | None:
+    m = _CELL_RE.fullmatch(token.strip())
+    if not m:
+        return None
+    col = column_index_from_string(m.group(1).upper())
+    row = int(m.group(2))
+    return row, col
+
+
+def _parse_area_indexes(area_spec: str, max_row: int, max_col: int) -> tuple[list[int], list[int]] | None:
+    area = str(area_spec or "").strip().replace(" ", "").replace("\t", "").replace("：", ":")
+    if _is_full_area_spec(area):
+        return list(range(1, max_row + 1)), list(range(1, max_col + 1))
+    if max_row <= 0 or max_col <= 0:
+        return [], []
+
+    cell_range = _CELL_RANGE_RE.fullmatch(area)
+    if cell_range:
+        start_col = column_index_from_string(cell_range.group(1).upper())
+        start_row = int(cell_range.group(2))
+        end_col = column_index_from_string(cell_range.group(3).upper())
+        end_row = int(cell_range.group(4))
+        row_start, row_end = sorted((start_row, end_row))
+        col_start, col_end = sorted((start_col, end_col))
+        rows = range(max(row_start, 1), min(row_end, max_row) + 1)
+        cols = range(max(col_start, 1), min(col_end, max_col) + 1)
+        return list(rows), list(cols)
+
+    col_range = _COL_RANGE_RE.fullmatch(area)
+    if col_range:
+        start_col = column_index_from_string(col_range.group(1).upper())
+        end_col = column_index_from_string(col_range.group(2).upper())
+        col_start, col_end = sorted((start_col, end_col))
+        cols = range(max(col_start, 1), min(col_end, max_col) + 1)
+        return list(range(1, max_row + 1)), list(cols)
+
+    row_range = _ROW_RANGE_RE.fullmatch(area)
+    if row_range:
+        start_row, end_row = sorted((int(row_range.group(1)), int(row_range.group(2))))
+        rows = range(max(start_row, 1), min(end_row, max_row) + 1)
+        return list(rows), list(range(1, max_col + 1))
+
+    cell = _cell_to_row_col(area)
+    if cell:
+        row, col = cell
+        if 1 <= row <= max_row and 1 <= col <= max_col:
+            return [row], [col]
+        return [], []
+
+    return None
+
+
+def _extract_area_values(data: list[list], area_spec: str) -> list[list] | None:
+    if not data:
+        return []
+    max_row = len(data)
+    max_col = max((len(row) for row in data), default=0)
+    if max_col == 0:
+        return []
+    parsed = _parse_area_indexes(area_spec, max_row, max_col)
+    if parsed is None:
+        return None
+    rows_idx, cols_idx = parsed
+    values: list[list] = []
+    for r in rows_idx:
+        src_row = data[r - 1] if r - 1 < len(data) else []
+        values.append([src_row[c - 1] if c - 1 < len(src_row) else None for c in cols_idx])
+    return values
+
+
+def _stitch_area_values(area_values: list[list[list]], stitch_mode: str) -> list[list]:
+    if not area_values:
+        return []
+    mode = str(stitch_mode or "").strip()
+    if mode == "纵向追加":
+        out: list[list] = []
+        for values in area_values:
+            out.extend(values)
+        return out
+
+    max_rows = max((len(values) for values in area_values), default=0)
+    widths = [max((len(row) for row in values), default=0) for values in area_values]
+    out = []
+    for row_idx in range(max_rows):
+        row: list = []
+        for values, width in zip(area_values, widths):
+            if row_idx < len(values):
+                src_row = values[row_idx]
+                row.extend(src_row + [None] * (width - len(src_row)))
+            else:
+                row.extend([None] * width)
+        out.append(row)
+    return out
+
+
+def _extract_configured_values(data: list[list], area_spec: str, stitch_mode: str) -> list[list] | None:
+    parts = _split_area_specs(area_spec)
+    area_values: list[list[list]] = []
+    for part in parts:
+        values = _extract_area_values(data, part)
+        if values is None:
+            return None
+        area_values.append(values)
+    if len(area_values) == 1:
+        return area_values[0]
+    return _stitch_area_values(area_values, stitch_mode)
+
+
 def _compact(values: list[list]) -> list[list]:
     """去除全空行与全空列。"""
     def _is_empty(v) -> bool:
@@ -183,9 +358,24 @@ def _is_blank_spec(spec: str) -> bool:
 
 
 def _is_full_sheet_task(task: dict) -> bool:
-    return bool(task.get("full_extract")) or (
-        _is_blank_spec(task.get("rows_spec", "")) and _is_blank_spec(task.get("cols_spec", ""))
-    )
+    return _is_full_area_spec(str(task.get("area_spec") or ""))
+
+
+def _output_path_for_task(task: dict, output_dir: Path, default_name: str) -> Path:
+    folder = str(task.get("output_folder") or "").strip()
+    if folder:
+        base_dir = Path(folder)
+        if not base_dir.is_absolute():
+            base_dir = output_dir / base_dir
+    else:
+        base_dir = output_dir
+    name = str(task.get("output_name") or "").strip() or default_name
+    path = Path(name)
+    if path.suffix.lower() != ".xlsx":
+        path = path.with_suffix(".xlsx")
+    if path.is_absolute():
+        return path
+    return base_dir / path
 
 
 def _copy_full_sheet_with_style(ws_src, ws_out) -> bool:
@@ -231,18 +421,19 @@ def _remove_default_blank(wb) -> None:
 
 
 def run_extract_sheets(target_wbs: Iterable[Path], tasks: list[dict],
-                       output_dir: Path, log_dir: Path) -> dict:
+                       output_dir: Path, log_dir: Path,
+                       append_existing: bool = False,
+                       default_output_name: str | None = None) -> dict:
     logger = get_logger("feature_1_6_extract_sheets", log_dir)
     if not tasks:
         logger.warning("'工作表提取'配置无启用任务")
         return {"files": 0, "extracted_sheets": 0, "output_files": 0,
                 "failed_files": 0, "paths": []}
 
-    ts_default = f"提取结果_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    ts_default = default_output_name or f"提取结果_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    out_wbs: dict[str, Workbook] = {}
-    out_paths: dict[str, Path] = {}
+    out_wbs: dict[Path, Workbook] = {}
     stat = {"files": 0, "extracted_sheets": 0, "output_files": 0,
             "failed_files": 0, "paths": []}
 
@@ -258,16 +449,22 @@ def run_extract_sheets(target_wbs: Iterable[Path], tasks: list[dict],
         stat["files"] += 1
         try:
             for task in tasks:
-                matched = _find_matched_sheets(wb_src, task["keywords"])
+                if not _workbook_matches(src, task):
+                    continue
+                if _name_matches_exclude(src.name, task):
+                    logger.info(f"  [skip] {src.name} 命中排除关键字")
+                    continue
+                matched = _find_matched_sheets_for_task(wb_src, task)
                 if not matched:
                     continue
 
-                out_name = task["output_name"] or ts_default
-                if out_name not in out_wbs:
-                    wb_new = Workbook()
-                    out_wbs[out_name] = wb_new
-                    out_paths[out_name] = output_dir / f"{out_name}.xlsx"
-                wb_out = out_wbs[out_name]
+                path = _output_path_for_task(task, output_dir, ts_default)
+                if path not in out_wbs:
+                    if append_existing and path.exists():
+                        out_wbs[path] = load_workbook(path)
+                    else:
+                        out_wbs[path] = Workbook()
+                wb_out = out_wbs[path]
 
                 for ws_src in matched:
                     sheet_title = _unique_sheet_name(wb_out, ws_src.title)
@@ -280,8 +477,16 @@ def run_extract_sheets(target_wbs: Iterable[Path], tasks: list[dict],
                             continue
                     else:
                         data = _read_ws_values(ws_src)
-                        values = _extract_values(data, task["rows_spec"],
-                                                 task["cols_spec"], task["full_extract"])
+                        values = _extract_configured_values(
+                            data, task.get("area_spec", ""), task.get("stitch_mode", ""),
+                        )
+                        if values is None:
+                            wb_out.remove(ws_out)
+                            logger.warning(
+                                f"  [skip] 配置行{task.get('row_no')} 提取区域无效: "
+                                f"{task.get('area_spec')}"
+                            )
+                            continue
                         values = _compact(values)
                         if not values:
                             wb_out.remove(ws_out)
@@ -290,14 +495,14 @@ def run_extract_sheets(target_wbs: Iterable[Path], tasks: list[dict],
                         _write_values(ws_out, values)
                     stat["extracted_sheets"] += 1
                     logger.info(
-                        f"  提取: {src.name} | {ws_src.title} -> {out_name}.xlsx[{sheet_title}]"
+                        f"  提取: {src.name} | {ws_src.title} -> {path.name}[{sheet_title}]"
                     )
         finally:
             wb_src.close()
 
-    for name, wb_out in out_wbs.items():
+    for path, wb_out in out_wbs.items():
         _remove_default_blank(wb_out)
-        path = out_paths[name]
+        path.parent.mkdir(parents=True, exist_ok=True)
         wb_out.save(path)
         wb_out.close()
         stat["output_files"] += 1

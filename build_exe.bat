@@ -2,16 +2,30 @@
 setlocal
 cd /d "%~dp0"
 
+set "PY_EXE_HZPBC=%UserProfile%\miniconda3\envs\HZPBC\python.exe"
 set "PY_EXE=%LocalAppData%\Programs\Python\Python310\python.exe"
+set "PY_CMD="
 
-if exist "%PY_EXE%" (
-  "%PY_EXE%" -m PyInstaller ^
+if exist "%PY_EXE_HZPBC%" (
+  set "PY_CMD=%PY_EXE_HZPBC%"
+) else if exist "%PY_EXE%" (
+  set "PY_CMD=%PY_EXE%"
+) else (
+  where python >nul 2>nul
+  if not errorlevel 1 (
+    set "PY_CMD=python"
+  )
+)
+
+if defined PY_CMD (
+  "%PY_CMD%" -m PyInstaller ^
   --onefile ^
   --name pytools ^
   --noupx ^
   --clean ^
   --noconfirm ^
   --paths . ^
+  --collect-all pandas ^
   --exclude-module matplotlib ^
   --exclude-module IPython ^
   --exclude-module jupyter ^
@@ -28,6 +42,7 @@ if exist "%PY_EXE%" (
   --clean ^
   --noconfirm ^
   --paths . ^
+  --collect-all pandas ^
   --exclude-module matplotlib ^
   --exclude-module IPython ^
   --exclude-module jupyter ^

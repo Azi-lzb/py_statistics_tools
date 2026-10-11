@@ -6,8 +6,12 @@ import pandas as pd
 from openpyxl import Workbook, load_workbook
 
 from pytools.core.config_init import initialize_or_repair_config
-from pytools.core.config_xlsx import SHEET_FILE_SORT_CONFIG
-from pytools.core.convert_33_34_35_37 import run_file_sort_prefix_49
+from pytools.core.config_xlsx import SHEET_CONFIG_RENAME, SHEET_FILE_SORT_CONFIG
+from pytools.core.convert_33_34_35_37 import (
+    run_file_sort_prefix_49,
+    run_remove_file_sort_prefix_410,
+    run_batch_rename_by_content_46,
+)
 
 
 def _make_cfg(path: Path) -> None:
@@ -107,6 +111,78 @@ def test_file_sort_prefix_uses_longest_enabled_prefix_width(tmp_path):
 
     assert (tmp_path / "01_202506_建设银行_存款表.xlsx").exists()
     assert (tmp_path / "02_202506_招商银行_存款表.xlsx").exists()
+
+
+def test_remove_file_sort_prefix_restores_only_numeric_underscore_prefix(tmp_path):
+    out_dir = tmp_path / "output"
+    logs = tmp_path / "logs"
+    prefixed = tmp_path / "001_202506_建设银行_存款表.xlsx"
+    plain = tmp_path / "202506_国开行_贷款表.xlsx"
+    prefixed.write_text("x", encoding="utf-8")
+    plain.write_text("x", encoding="utf-8")
+
+    cfg = tmp_path / "config.xlsx"
+    _make_cfg(cfg)
+
+    stat = run_remove_file_sort_prefix_410(cfg, [prefixed, plain], out_dir, logs)
+
+    assert stat["renamed"] == 1
+    assert stat["skipped"] == 1
+    assert (tmp_path / "202506_建设银行_存款表.xlsx").exists()
+    assert plain.exists()
+    result = pd.read_excel(stat["output"], sheet_name="取消文件排序前缀结果", dtype=object).fillna("")
+    assert list(result["状态"]) == ["已取消排序前缀", "跳过：无匹配排序前缀"]
+
+
+def test_remove_file_sort_prefix_avoids_overwrite(tmp_path):
+    out_dir = tmp_path / "output"
+    logs = tmp_path / "logs"
+    prefixed = tmp_path / "001_报表.xlsx"
+    existing = tmp_path / "报表.xlsx"
+    prefixed.write_text("new", encoding="utf-8")
+    existing.write_text("old", encoding="utf-8")
+
+    cfg = tmp_path / "config.xlsx"
+    _make_cfg(cfg)
+
+    stat = run_remove_file_sort_prefix_410(cfg, [prefixed], out_dir, logs)
+
+    assert stat["renamed"] == 1
+    assert existing.read_text(encoding="utf-8") == "old"
+    assert (tmp_path / "报表_1.xlsx").read_text(encoding="utf-8") == "new"
+
+
+def test_remove_file_sort_prefix_keeps_content_prefix_when_sort_was_added_first(tmp_path):
+    cfg = tmp_path / "config.xlsx"
+    out_dir = tmp_path / "output"
+    logs = tmp_path / "logs"
+    _make_cfg(cfg)
+    wb = load_workbook(cfg)
+    ws = wb.create_sheet(SHEET_CONFIG_RENAME)
+    ws["O1"] = "内容重命名启用"
+    ws["P1"] = "内容重命名取值规则"
+    ws["O2"] = "Y"
+    ws["P2"] = "sheet1@A1"
+    ws_sort = wb[SHEET_FILE_SORT_CONFIG]
+    ws_sort["C2"] = "测试文件"
+    wb.save(cfg)
+    wb.close()
+    src = tmp_path / "测试文件.xlsx"
+    wb = Workbook()
+    wb.active.title = "sheet1"
+    wb.active["A1"] = "机构A"
+    wb.save(src)
+    wb.close()
+
+    run_file_sort_prefix_49(cfg, [src], out_dir, logs)
+    sorted_file = tmp_path / "001_测试文件.xlsx"
+    run_batch_rename_by_content_46(cfg, [sorted_file], logs)
+    content_sorted_file = tmp_path / "机构A_001_测试文件.xlsx"
+
+    stat = run_remove_file_sort_prefix_410(cfg, [content_sorted_file], out_dir, logs)
+
+    assert stat["renamed"] == 1
+    assert (tmp_path / "机构A_测试文件.xlsx").exists()
 
 
 def test_config_init_creates_file_sort_config(tmp_path):

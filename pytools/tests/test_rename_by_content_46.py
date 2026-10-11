@@ -4,12 +4,13 @@ from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
 
-from pytools.core.config_xlsx import SHEET_CONFIG_RENAME
+from pytools.core.config_xlsx import SHEET_CONFIG_RENAME, SHEET_FILE_SORT_CONFIG
 from pytools.core.config_init import initialize_or_repair_config
 from pytools.core.convert_33_34_35_37 import (
     _load_content_rename_spec,
     run_batch_rename_by_content_46,
     run_batch_unrename_by_content_47,
+    run_file_sort_prefix_49,
 )
 
 
@@ -23,6 +24,9 @@ def _make_cfg(path: Path) -> None:
     ws["O2"] = "Y"
     ws["P2"] = "sheet1@A1;sheet2@A2"
     ws["Q2"] = "测试配置"
+    ws_sort = wb.create_sheet(SHEET_FILE_SORT_CONFIG)
+    ws_sort.append(["是否启用", "排序前缀", "匹配关键词", "备注"])
+    ws_sort.append(["Y", "001", "测试文件", "测试排序前缀"])
     wb.save(path)
     wb.close()
 
@@ -165,6 +169,25 @@ def test_content_unrename_uses_next_path_when_target_exists(tmp_path):
     assert stat["ok"] == 1
     assert existing.exists()
     assert (tmp_path / "测试文件_1.xlsx").exists()
+
+
+def test_content_unrename_keeps_current_sort_prefix(tmp_path):
+    cfg = tmp_path / "config.xlsx"
+    logs = tmp_path / "logs"
+    out_dir = tmp_path / "output"
+    src = tmp_path / "测试文件.xlsx"
+    _make_cfg(cfg)
+    _make_source(src)
+
+    run_batch_rename_by_content_46(cfg, [src], logs)
+    content_renamed = tmp_path / "A_B_测试文件.xlsx"
+    run_file_sort_prefix_49(cfg, [content_renamed], out_dir, logs)
+    sorted_file = tmp_path / "001_A_B_测试文件.xlsx"
+
+    stat = run_batch_unrename_by_content_47(cfg, [sorted_file], logs)
+
+    assert stat["ok"] == 1
+    assert (tmp_path / "001_测试文件.xlsx").exists()
 
 
 def test_content_rename_ignores_legacy_l2_when_no_opq_enabled(tmp_path):

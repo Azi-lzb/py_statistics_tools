@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from openpyxl import load_workbook, Workbook
 from openpyxl.comments import Comment
+from openpyxl.styles import Alignment, Font, PatternFill
 
 from .config_xlsx import (
     SHEET_GLOBAL,
@@ -146,16 +148,15 @@ HEADER_COMMENTS = {
         "是否为外资行": "关键字段（程序读取）：1.3 使用，1=外资行（将被剔除），0/空=否。",
     },
     SHEET_EXTRACT_CONFIG: {
-        "表A-币种": "关键字段（程序读取）：1.6 匹配关键词1，按子串匹配工作表名（可空）。",
-        "表A-地区": "关键字段（程序读取）：1.6 匹配关键词2（可空）。",
-        "表A-机构": "关键字段（程序读取）：1.6 匹配关键词3（可空）。",
-        "表A-类型": "关键字段（程序读取）：1.6 匹配关键词4（可空）。",
-        "表A-名称": "关键字段（程序读取）：1.6 匹配关键词5（可空）。",
-        "是否禁用": "关键字段（程序读取）：Y/是/1 禁用该行。",
-        "是否整表提取": "关键字段（程序读取）：Y/是/1 整表复制；否=按提取行/列。",
-        "提取行": "关键字段（程序读取）：可空=全部；支持 2,3,4,5 或 2:5。",
-        "提取列": "关键字段（程序读取）：可空=全部；支持 A,B,C 或 A:D 或数字。",
-        "输出文件名": "关键字段（程序读取）：输出工作簿基名（不含扩展名）；空则自动命名。",
+        "是否启用": "关键字段（程序读取）：Y/是/1/true 启用该行。",
+        "工作簿关键字": "关键字段（程序读取）：匹配源文件名；分号/中文分号=必须同时命中，逗号/中文逗号/|=同组任选；空=不限制。",
+        "工作表关键字": "关键字段（程序读取）：匹配工作表名；分号/中文分号=必须同时命中，逗号/中文逗号/|=同组任选；空=不限制。",
+        "排除关键字": "关键字段（程序读取）：匹配源文件名或工作表名；命中则跳过；语法同关键词列；空=不排除。",
+        "提取区域": "关键字段（程序读取）：空/整表/全部=整表；支持 A1:D20、A:D、1:10；多个区域用分号分隔。",
+        "多区域拼接方式": "关键字段（程序读取）：空/横向拼接=左右拼接；纵向追加=上下追加。",
+        "输出文件夹": "关键字段（程序读取）：空=默认 output；相对路径=output 下子目录；绝对路径=直接使用。",
+        "文件名": "关键字段（程序读取）：输出工作簿基名（不含扩展名）；空则自动命名。",
+        "备注": "备注字段（仅人工说明）：程序不读取。",
     },
 }
 
@@ -288,6 +289,77 @@ def _ensure_file_sort_examples(ws) -> bool:
     return True
 
 
+def _ensure_validation_rule_map_examples(ws) -> bool:
+    """仅在无数据行时写入同一映射组的示例。"""
+    if ws.max_row > 1:
+        return False
+    rows = [
+        ["Y", "表8-1", "J", "26", "表8-1", "S0801_J_26", "1", "1", "A", "资产"],
+        ["Y", "表8-1", "J", "26", "表8-1", "S0801_J_26", "2", "2", "A", "资产子项1"],
+        ["Y", "表8-1", "J", "26", "表8-1", "S0801_J_26", "3", "3", "A", "资产子项2"],
+    ]
+    for row_no, row in enumerate(rows, start=2):
+        for col_no, value in enumerate(row, start=1):
+            ws.cell(row_no, col_no).value = value
+    return True
+
+
+def _style_validation_rule_map(ws) -> None:
+    widths = [12, 20, 10, 10, 16, 24, 14, 16, 16, 32]
+    for col_no, width in enumerate(widths, start=1):
+        ws.column_dimensions[ws.cell(1, col_no).column_letter].width = width
+    for cell in ws[1]:
+        cell.fill = PatternFill(fill_type="solid", fgColor="1F4E78")
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+    ws.row_dimensions[1].height = 30
+    for row in ws.iter_rows(min_row=2, max_col=len(VALIDATION_RULE_MAP_COLS)):
+        for cell in row:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+
+_LEGACY_VALIDATION_RULE_MAP_COLS = [
+    "是否启用", "校验关系Sheet", "口径", "年份", "映射键", "正式引用", "备注",
+]
+_LEGACY_FORMAL_REF_RE = re.compile(r"^\[?(?P<code>.+)_(?P<row>\d+)_(?P<column>[A-Za-z][A-Za-z0-9]*)\]?$")
+
+
+def _migrate_validation_rule_map(ws) -> bool:
+    headers = [ws.cell(1, col).value for col in range(1, len(_LEGACY_VALIDATION_RULE_MAP_COLS) + 1)]
+    if headers != _LEGACY_VALIDATION_RULE_MAP_COLS:
+        return False
+    migrated_rows = []
+    for row_no in range(2, ws.max_row + 1):
+        enabled, relation_sheet, caliber, year, key, formal_ref, remark = [
+            ws.cell(row_no, col).value for col in range(1, 8)
+        ]
+        match = _LEGACY_FORMAL_REF_RE.match(str(formal_ref or "").strip())
+        if match:
+            table_code = match.group("code")
+            actual_row = match.group("row")
+            default_column = match.group("column").upper()
+        else:
+            table_code = str(formal_ref or "").strip("[] ")
+            actual_row = ""
+            default_column = ""
+        migrated_rows.append([
+            enabled, relation_sheet, caliber, year, relation_sheet, table_code,
+            key, actual_row, default_column, remark,
+        ])
+    for row in ws.iter_rows(min_row=1, max_row=max(ws.max_row, 1), min_col=1, max_col=10):
+        for cell in row:
+            cell.value = None
+            cell.comment = None
+    for col_no, header in enumerate(VALIDATION_RULE_MAP_COLS, start=1):
+        ws.cell(1, col_no).value = header
+    for row_no, row in enumerate(migrated_rows, start=2):
+        for col_no, value in enumerate(row, start=1):
+            ws.cell(row_no, col_no).value = value
+    return True
+
+
 def initialize_or_repair_config(cfg_path: Path) -> dict[str, int]:
     """初始化或修复 config.xlsx。
 
@@ -307,6 +379,12 @@ def initialize_or_repair_config(cfg_path: Path) -> dict[str, int]:
         # 移除默认空Sheet，避免命名冲突
         default_ws = wb.active
         wb.remove(default_ws)
+
+    obsolete_sheet = "校验规则生成配置"
+    if obsolete_sheet in wb.sheetnames:
+        wb.remove(wb[obsolete_sheet])
+        repaired += 1
+        details.append(f"{obsolete_sheet}: removed (校验规则生成功能已移除)")
 
     spec = [
         (SHEET_GLOBAL, GLOBAL_COLS),

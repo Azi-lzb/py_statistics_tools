@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 from collections import defaultdict
+import re
 from time import perf_counter
 
 from openpyxl import load_workbook
@@ -13,6 +15,10 @@ from .logger import get_logger
 
 
 RED_FILL = PatternFill(fill_type="solid", fgColor="FFFF0000")
+_FULL_DATE_TEXT = re.compile(
+    r"^(20\d{2})[年\-./](\d{1,2})[月\-./](\d{1,2})(?:日)?"
+    r"(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?$"
+)
 
 
 @dataclass
@@ -67,7 +73,18 @@ def _dedup_tasks_append(tasks: list[DedupTask]) -> tuple[list[DedupTask], int]:
 def _norm(v) -> str:
     if v is None:
         return ""
-    return str(v).strip()
+    if isinstance(v, datetime):
+        return v.date().isoformat()
+    if isinstance(v, date):
+        return v.isoformat()
+    text = str(v).strip()
+    match = _FULL_DATE_TEXT.fullmatch(text)
+    if match:
+        try:
+            return date(*(int(part) for part in match.groups())).isoformat()
+        except ValueError:
+            pass
+    return text
 
 
 def _workbook_is_supported(path: Path) -> bool:

@@ -2,6 +2,7 @@ from __future__ import annotations
 import sys
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -60,6 +61,7 @@ from pytools.core.convert_33_34_35_37 import (
     run_batch_rename_local_map_48,
     run_submission_check_48,
     run_file_sort_prefix_49,
+    run_remove_file_sort_prefix_410,
     run_archive_by_date_preview,
     run_archive_by_type_preview,
     run_archive_plan_copy,
@@ -73,6 +75,7 @@ from pytools.core.feature_1_4_fx_header import run_fx_header_fix
 from pytools.core.feature_1_5_region_sum_check import run_region_sum_check
 from pytools.core.feature_1_6_extract_sheets import run_extract_sheets
 from pytools.core.feature_1_8_adjust_rural_loan import run_adjust_rural_loan
+from pytools.core.feature_1_9_adjust_rural_loan_quarterly import run_adjust_rural_loan_quarterly
 from pytools.core.feature_1_4_fx_header_com import run_fx_header_fix_com
 from pytools.core.feature_1_6_extract_sheets_com import run_extract_sheets_com
 from pytools.core.feature_1_1_split_village_bank_com import run_split_village_bank_com
@@ -80,6 +83,7 @@ from pytools.core.feature_1_2_normalize_institution_com import run_normalize_ins
 from pytools.core.feature_1_3_remove_foreign_bank_com import run_remove_foreign_bank_com
 from pytools.core.feature_1_5_region_sum_check_com import run_region_sum_check_com
 from pytools.core.feature_1_8_adjust_rural_loan_com import run_adjust_rural_loan_com
+from pytools.core.feature_1_9_adjust_rural_loan_quarterly_com import run_adjust_rural_loan_quarterly_com
 
 def _app_base_dir() -> Path:
 
@@ -125,6 +129,7 @@ PENDING_MENU = """
   5  [自动路由COM] 地区总分校验
   6  [自动路由COM] 提取工作表数据（工作表提取）
   7  [自动路由COM] 涉农贷款比上月修正
+  8  [自动路由COM] 季度涉农贷款比上月修正及分地区核对
   0  返回
 ------------------------
 """
@@ -171,6 +176,7 @@ CONVERT_MENU = """
   7  批量局部映射重命名文件（重命名配置 M:N）
   8  提交缺失检查（提交检查配置）
   9  文件排序前缀（文件排序配置）
+ 10  取消文件排序前缀
   0  返回
 ----------------------
 """
@@ -194,6 +200,7 @@ QUICK_MENU = """
 ------ 快捷工具 ------
   1  打开配置文件（config.xlsx）
   2  打开 output 最新文件
+  3  打开 output 文件夹
   0  返回
 ----------------------
 """
@@ -208,6 +215,14 @@ PRINT_MENU = """
   0  返回
 ----------------------
 """
+
+
+def _print_selected_paths(paths: list[Path], label: str = "已选择文件") -> None:
+    if not paths:
+        return
+    print(f"→ {label} {len(paths)} 个：")
+    for idx, path in enumerate(paths, start=1):
+        print(f"  {idx}. {path}")
 
 
 def _pick_files_for_compare() -> tuple[Path | None, list[Path]]:
@@ -225,7 +240,7 @@ def _pick_files_for_compare() -> tuple[Path | None, list[Path]]:
     if not tmpl:
         root.destroy()
         return None, []
-    print(f"  模板: {tmpl}")
+    _print_selected_paths([Path(tmpl)], "已选择模板文件")
     print("→ 请在弹出窗口中选择 [源文件]（可多选）")
     srcs = filedialog.askopenfilenames(
         title="选择源文件（可多选）",
@@ -233,7 +248,7 @@ def _pick_files_for_compare() -> tuple[Path | None, list[Path]]:
     )
     root.destroy()
     src_paths = [Path(p) for p in srcs]
-    print(f"  源文件 {len(src_paths)} 个")
+    _print_selected_paths(src_paths, "已选择源文件")
     return Path(tmpl), src_paths
 
 
@@ -261,7 +276,7 @@ def _pick_source_files(
         root.destroy()
         picked = [Path(p) for p in srcs]
         if picked:
-            print(f"→ 已选择 {len(picked)} 个文件")
+            _print_selected_paths(picked, "已选择文件")
             return picked
     except Exception as e:
         print(f"[提示] 文件弹窗不可用：{e}")
@@ -276,7 +291,134 @@ def _pick_source_files(
         pp = Path(p)
         if pp.exists():
             out.append(pp)
+    _print_selected_paths(out, "已输入文件")
     return out
+
+
+def _pick_source_folders(title: str) -> list[Path]:
+    """连续选择多个源文件夹，弹窗不可用时允许分号输入。"""
+    print(f"→ 正在打开文件夹选择窗口：{title}")
+    try:
+        import tkinter as tk
+        from tkinter import filedialog, messagebox
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        root.lift()
+        root.update()
+        folders: list[Path] = []
+        while True:
+            raw = filedialog.askdirectory(title=title)
+            if not raw:
+                break
+            folder = Path(raw)
+            if folder not in folders:
+                folders.append(folder)
+            if not messagebox.askyesno("继续选择", "是否继续选择其他源文件夹？", parent=root):
+                break
+        root.destroy()
+        if folders:
+            _print_selected_paths(folders, "已选择文件夹")
+            return folders
+    except Exception as e:
+        print(f"[提示] 文件夹弹窗不可用：{e}")
+
+    raw = input("文件夹路径（可用分号分隔多个，输入 0 取消）> ").strip()
+    if raw in ("", "0"):
+        return []
+    folders: list[Path] = []
+    for text in raw.replace("；", ";").split(";"):
+        folder = Path(text.strip().strip('"').strip("'"))
+        if not text.strip():
+            continue
+        if not folder.is_dir():
+            print(f"[提示] 文件夹不存在，已跳过: {folder}")
+            continue
+        if folder not in folders:
+            folders.append(folder)
+    _print_selected_paths(folders, "已输入文件夹")
+    return folders
+
+
+def _pick_excel_folders(title: str) -> list[Path]:
+    """兼容旧调用：连续选择多个 Excel 源文件夹。"""
+    return _pick_source_folders(title)
+
+
+def _collect_files(folder: Path, recursive: bool, suffixes: set[str] | None = None) -> list[Path]:
+    """收集文件夹中的文件；suffixes 为 None 时不限制文件类型。"""
+    normalized_suffixes = {suffix.lower() for suffix in suffixes} if suffixes else None
+    candidates = folder.rglob("*") if recursive else folder.iterdir()
+    return sorted(
+        (
+            path for path in candidates
+            if path.is_file()
+            and not path.name.startswith("~$")
+            and (normalized_suffixes is None or path.suffix.lower() in normalized_suffixes)
+        ),
+        key=lambda path: str(path.relative_to(folder)).casefold(),
+    )
+
+
+def _collect_files_from_folders(
+    folders: list[Path], recursive: bool, suffixes: set[str] | None = None,
+) -> list[Path]:
+    """合并多个文件夹中的文件，并按绝对路径去重。"""
+    seen: dict[str, Path] = {}
+    for folder in folders:
+        for path in _collect_files(folder, recursive, suffixes):
+            resolved = path.resolve()
+            seen[str(resolved).casefold()] = resolved
+    return sorted(seen.values(), key=lambda path: str(path).casefold())
+
+
+def _collect_excel_files(folder: Path, recursive: bool) -> list[Path]:
+    """兼容旧调用：收集文件夹中的 Excel 文件。"""
+    return _collect_files(folder, recursive, {".xlsx", ".xlsm", ".xls"})
+
+
+def _collect_excel_files_from_folders(folders: list[Path], recursive: bool) -> list[Path]:
+    """兼容旧调用：合并多个文件夹的 Excel 文件。"""
+    return _collect_files_from_folders(folders, recursive, {".xlsx", ".xlsm", ".xls"})
+
+
+def _pick_source_files_or_folders(
+    title: str,
+    filetypes: list[tuple[str, str]] | None = None,
+    suffixes: set[str] | None = None,
+) -> list[Path]:
+    """选择多个文件，或选择多个文件夹后按当前层/递归收集文件。"""
+    print(f"→ {title}")
+    print("  1  选择文件（可多选）")
+    print("  2  选择文件夹（可多选，仅当前层）")
+    print("  3  选择文件夹（可多选，递归全部子目录）")
+    print("  0  取消")
+    mode = input("选择方式> ").strip()
+    if mode == "1":
+        return _pick_source_files(title, filetypes=filetypes)
+    if mode not in {"2", "3"}:
+        return []
+
+    folders = _pick_source_folders(title)
+    if not folders:
+        return []
+    recursive = mode == "3"
+    sources = _collect_files_from_folders(folders, recursive, suffixes)
+    scope = "含子文件夹" if recursive else "当前层"
+    print(f"→ 已选 {len(folders)} 个文件夹，{scope}共识别文件 {len(sources)} 个")
+    _print_selected_paths(sources, "参与处理的文件")
+    return sources
+
+
+def _pick_excel_sources_from_folder(title: str, recursive: bool) -> list[Path]:
+    folders = _pick_excel_folders(title)
+    if not folders:
+        return []
+    sources = _collect_excel_files_from_folders(folders, recursive)
+    scope = "含子文件夹" if recursive else "当前层"
+    print(f"→ 已选 {len(folders)} 个文件夹，{scope}共识别 Excel 文件 {len(sources)} 个")
+    _print_selected_paths(sources, "参与宽表汇总的文件")
+    return sources
 
 
 def _pick_archive_paths(title: str) -> list[Path]:
@@ -302,7 +444,9 @@ def _pick_archive_paths(title: str) -> list[Path]:
             root.update()
             p = filedialog.askdirectory(title=title)
             root.destroy()
-            return [Path(p)] if p else []
+            paths = [Path(p)] if p else []
+            _print_selected_paths(paths, "已选择文件夹")
+            return paths
         except Exception as e:
             print(f"[提示] 文件夹弹窗不可用：{e}")
 
@@ -323,14 +467,18 @@ def _pick_archive_target_root() -> Path | None:
         p = filedialog.askdirectory(title="选择归档目标根目录")
         root.destroy()
         if p:
-            return Path(p)
+            picked = Path(p)
+            _print_selected_paths([picked], "已选择目标目录")
+            return picked
     except Exception as e:
         print(f"[提示] 目录弹窗不可用：{e}")
 
     raw = input("目标根目录路径（输入 0 取消）> ").strip()
     if raw in ("", "0"):
         return None
-    return Path(raw.strip('"').strip("'"))
+    picked = Path(raw.strip('"').strip("'"))
+    _print_selected_paths([picked], "已输入目标目录")
+    return picked
 
 
 def _split_sources_for_auto_route(paths: list[Path]) -> tuple[list[Path], list[Path]]:
@@ -411,7 +559,9 @@ def _pick_one_workbook(title: str) -> Path | None:
     root.destroy()
     if not p:
         return None
-    return Path(p)
+    picked = Path(p)
+    _print_selected_paths([picked], "已选择文件")
+    return picked
 
 
 def _to_dedup_tasks(raw_tasks: list[dict]) -> list[DedupTask]:
@@ -533,6 +683,15 @@ def dispatch(choice: str) -> None:
         except Exception as e:
             print(f"[失败] 打开输出文件失败: {e}")
         return
+    if choice == "q3":
+        g = load_global(CFG_PATH)
+        try:
+            g.output_dir.mkdir(parents=True, exist_ok=True)
+            _open_path(g.output_dir)
+            print(f"[完成] 已打开输出文件夹: {g.output_dir}")
+        except Exception as e:
+            print(f"[失败] 打开输出文件夹失败: {e}")
+        return
     if choice == "5":
         run_precheck(CFG_PATH)
         return
@@ -618,7 +777,11 @@ def dispatch(choice: str) -> None:
         if not rules:
             print("[无启用的时序提取规则]")
             return
-        srcs = _pick_source_files("选择宽表汇总源文件（自动路由：xls走COM，其它走非COM）")
+        srcs = _pick_source_files_or_folders(
+            "选择宽表汇总源文件或文件夹（xls 自动走 COM）",
+            filetypes=[("Excel", "*.xls *.xlsx *.xlsm")],
+            suffixes={".xls", ".xlsx", ".xlsm"},
+        )
         if not srcs:
             print("[已取消]")
             return
@@ -856,14 +1019,20 @@ def dispatch(choice: str) -> None:
             except RuntimeError as e:
                 print(f"[COM 不可用] {e}")
     elif choice == "t3":
-        srcs = _pick_source_files("选择要批量重命名的文件（可多选）")
+        srcs = _pick_source_files_or_folders(
+            "选择要批量重命名的文件或文件夹", filetypes=[("所有文件", "*.*")],
+        )
         if not srcs:
             print("[已取消]")
             return
         stat = run_batch_rename_33(CFG_PATH, srcs, g.log_dir)
         print(f"[完成] 成功={stat['ok']} 跳过={stat['skip']}")
     elif choice == "t4":
-        srcs = _pick_source_files("选择要批量转换格式的文件（可多选）")
+        srcs = _pick_source_files_or_folders(
+            "选择要批量转换格式的 Excel 文件或文件夹",
+            filetypes=[("Excel/WPS/CSV", "*.xls *.xlsx *.xlsm *.xlsb *.xlt *.xltx *.xltm *.et *.ett *.csv")],
+            suffixes={".xls", ".xlsx", ".xlsm", ".xlsb", ".xlt", ".xltx", ".xltm", ".et", ".ett", ".csv"},
+        )
         if not srcs:
             print("[已取消]")
             return
@@ -878,7 +1047,10 @@ def dispatch(choice: str) -> None:
             f"成功={stat['ok']} 跳过/失败={stat['skip']}"
         )
     elif choice == "t5":
-        srcs = _pick_source_files("选择要批量转换Word格式的文件（可多选）")
+        srcs = _pick_source_files_or_folders(
+            "选择要批量转换格式的 Word 文件或文件夹",
+            filetypes=[("Word", "*.doc *.docx")], suffixes={".doc", ".docx"},
+        )
         if not srcs:
             print("[已取消]")
             return
@@ -893,14 +1065,20 @@ def dispatch(choice: str) -> None:
             f"成功={stat['ok']} 跳过/失败={stat['skip']}"
         )
     elif choice == "t7":
-        srcs = _pick_source_files("选择要批量修改Sheet名的工作簿（可多选）")
+        srcs = _pick_source_files_or_folders(
+            "选择要批量修改 Sheet 名的工作簿或文件夹",
+            filetypes=[("Excel", "*.xlsx *.xlsm")], suffixes={".xlsx", ".xlsm"},
+        )
         if not srcs:
             print("[已取消]")
             return
         stat = run_batch_rename_sheet_37(CFG_PATH, srcs, g.log_dir)
         print(f"[完成] 工作簿={stat['workbooks']} 重命名={stat['rename_ok']} 跳过={stat['skip']}")
     elif choice == "t7com":
-        srcs = _pick_source_files("选择 [COM] 要批量修改Sheet名的工作簿（可多选）")
+        srcs = _pick_source_files_or_folders(
+            "选择 [COM] 要批量修改 Sheet 名的工作簿或文件夹",
+            filetypes=[("Excel", "*.xls *.xlsx *.xlsm")], suffixes={".xls", ".xlsx", ".xlsm"},
+        )
         if not srcs:
             print("[已取消]")
             return
@@ -922,7 +1100,11 @@ def dispatch(choice: str) -> None:
             except RuntimeError as e:
                 print(f"[COM 不可用] {e}")
     elif choice == "t8":
-        srcs = _pick_source_files("选择要根据内容重命名的文件（可多选）")
+        srcs = _pick_source_files_or_folders(
+            "选择要根据内容重命名的 Excel 文件或文件夹",
+            filetypes=[("Excel", "*.xls *.xlsx *.xlsm *.xlt")],
+            suffixes={".xls", ".xlsx", ".xlsm", ".xlt"},
+        )
         if not srcs:
             print("[已取消]")
             return
@@ -933,7 +1115,11 @@ def dispatch(choice: str) -> None:
             f"成功={stat['ok']} 跳过={stat['skip']}"
         )
     elif choice == "t9":
-        srcs = _pick_source_files("选择要取消根据内容重命名前缀的文件（可多选）")
+        srcs = _pick_source_files_or_folders(
+            "选择要取消根据内容重命名前缀的 Excel 文件或文件夹",
+            filetypes=[("Excel", "*.xls *.xlsx *.xlsm *.xlt")],
+            suffixes={".xls", ".xlsx", ".xlsm", ".xlt"},
+        )
         if not srcs:
             print("[已取消]")
             return
@@ -944,8 +1130,8 @@ def dispatch(choice: str) -> None:
             f"成功={stat['ok']} 跳过={stat['skip']}"
         )
     elif choice == "t10":
-        srcs = _pick_source_files(
-            "选择要按 M:N 局部映射重命名的文件（可多选，支持任意文件）",
+        srcs = _pick_source_files_or_folders(
+            "选择要按 M:N 局部映射重命名的文件或文件夹（支持任意文件）",
             filetypes=[("所有文件", "*.*")],
         )
         if not srcs:
@@ -954,8 +1140,8 @@ def dispatch(choice: str) -> None:
         stat = run_batch_rename_local_map_48(CFG_PATH, srcs, g.log_dir)
         print(f"[完成] 映射规则={stat.get('rules', 0)} 成功={stat['ok']} 跳过={stat['skip']}")
     elif choice == "t11":
-        srcs = _pick_source_files(
-            "选择要检查提交情况的文件（可多选，不递归文件夹）",
+        srcs = _pick_source_files_or_folders(
+            "选择要检查提交情况的文件或文件夹",
             filetypes=[("所有文件", "*.*")],
         )
         if not srcs:
@@ -968,8 +1154,8 @@ def dispatch(choice: str) -> None:
             f"未识别文件={stat['unmatched']} 多重命中={stat['multi']}"
         )
     elif choice == "t12":
-        srcs = _pick_source_files(
-            "选择要添加排序前缀的文件（可多选，不递归文件夹）",
+        srcs = _pick_source_files_or_folders(
+            "选择要添加排序前缀的文件或文件夹",
             filetypes=[("所有文件", "*.*")],
         )
         if not srcs:
@@ -980,6 +1166,19 @@ def dispatch(choice: str) -> None:
             f"[完成] 输出={stat['output']} 规则={stat['rules']} 文件={stat['files']} "
             f"重命名={stat['renamed']} 未命中={stat['unmatched']} "
             f"跳过={stat['skipped']} 失败={stat['failed']}"
+        )
+    elif choice == "t13":
+        srcs = _pick_source_files_or_folders(
+            "选择要取消排序前缀的文件或文件夹",
+            filetypes=[("所有文件", "*.*")],
+        )
+        if not srcs:
+            print("[已取消]")
+            return
+        stat = run_remove_file_sort_prefix_410(CFG_PATH, srcs, g.output_dir, g.log_dir)
+        print(
+            f"[完成] 输出={stat['output']} 规则={stat['rules']} 文件={stat['files']} "
+            f"已取消前缀={stat['renamed']} 跳过={stat['skipped']} 失败={stat['failed']}"
         )
     elif choice == "ar_date":
         paths = _pick_archive_paths("选择要按日期归档预览的文件或文件夹")
@@ -1139,15 +1338,18 @@ def dispatch(choice: str) -> None:
                 f"  展示：{stat['show']}"
             )
     elif choice == "x11":
-        curr = _pick_one_workbook("选择本期文件（含村镇银行数据）")
+        print("→ 第一次文件选择：选择 本期商业银行共享一批")
+        curr = _pick_one_workbook("选择 本期商业银行共享一批")
         if not curr:
             print("[已取消]")
             return
-        prev = _pick_one_workbook("选择去年同期文件（含村镇银行数据）")
+        print("→ 第二次文件选择：选择 去年同期商业银行共享一批")
+        prev = _pick_one_workbook("选择 去年同期商业银行共享一批")
         if not prev:
             print("[已取消]")
             return
-        srcs = _pick_source_files("选择包含'分机构'工作表的目标文件（可多选）")
+        print("→ 第三次文件选择：选择 本外币、人民币、外币、外发用文件（修改分机构表）")
+        srcs = _pick_source_files("选择 本外币、人民币、外币、外发用文件（修改分机构表）（可多选）")
         if not srcs:
             print("[已取消]")
             return
@@ -1213,7 +1415,8 @@ def dispatch(choice: str) -> None:
         if not foreign_set:
             print("[已中止] 外资行配置为空，请在 config.xlsx 的'机构映射表' C 列将外资行标记为 1")
             return
-        srcs = _pick_source_files("选择包含'分机构'工作表的目标文件（可多选，将生成(金融局)副本）")
+        print("→ 文件选择：选择 外发用报表（删除分机构表的外资行）")
+        srcs = _pick_source_files("选择 外发用报表（删除分机构表的外资行）（可多选，将生成(金融局)副本）")
         if not srcs:
             print("[已取消]")
             return
@@ -1320,8 +1523,12 @@ def dispatch(choice: str) -> None:
             return
         normal_srcs, com_srcs = _split_sources_for_auto_route(srcs)
         print(f"→ 自动路由：非COM={len(normal_srcs)}，COM(.xls)={len(com_srcs)}")
+        default_output_name = f"提取结果_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         if normal_srcs:
-            stat = run_extract_sheets(normal_srcs, tasks, g.output_dir, g.log_dir)
+            stat = run_extract_sheets(
+                normal_srcs, tasks, g.output_dir, g.log_dir,
+                default_output_name=default_output_name,
+            )
             print(
                 f"[完成] 非COM 源文件={stat['files']} 提取sheet={stat['extracted_sheets']} "
                 f"输出文件={stat['output_files']} 失败={stat['failed_files']}"
@@ -1330,7 +1537,11 @@ def dispatch(choice: str) -> None:
                 print(f"  -> {p}")
         if com_srcs:
             try:
-                stat = run_extract_sheets_com(com_srcs, tasks, g.output_dir, g.log_dir)
+                stat = run_extract_sheets_com(
+                    com_srcs, tasks, g.output_dir, g.log_dir,
+                    append_existing=bool(normal_srcs),
+                    default_output_name=default_output_name,
+                )
                 print(
                     f"[完成] COM 源文件={stat['files']} 提取sheet={stat['extracted_sheets']} "
                     f"输出文件={stat['output_files']} 失败={stat['failed_files']}"
@@ -1340,11 +1551,13 @@ def dispatch(choice: str) -> None:
             except RuntimeError as e:
                 print(f"[COM 不可用] {e}")
     elif choice == "x18":
-        cur = _pick_one_workbook("选择本期 Excel 文件")
+        print("→ 第一次文件选择：选择本期 专项二批次、商业银行共享二批（修改涉农贷款比上月）")
+        cur = _pick_one_workbook("选择本期 专项二批次、商业银行共享二批（修改涉农贷款比上月）")
         if not cur:
             print("[已取消]")
             return
-        prev = _pick_one_workbook("选择上期 Excel 文件")
+        print("→ 第二次文件选择：选择上期 专项二批次、商业银行共享二批（修改涉农贷款比上月）")
+        prev = _pick_one_workbook("选择上期 专项二批次、商业银行共享二批（修改涉农贷款比上月）")
         if not prev:
             print("[已取消]")
             return
@@ -1370,6 +1583,48 @@ def dispatch(choice: str) -> None:
                 print("  本期未匹配到上期: " + "、".join(r["unmatched_current"]))
             if r["previous_only"]:
                 print("  上期独有: " + "、".join(r["previous_only"]))
+    elif choice == "x19":
+        print("→ 第一次文件选择：选择本期季度涉农贷款文件（将就地回填全部地区分机构表）")
+        cur = _pick_one_workbook("选择本期季度涉农贷款文件")
+        if not cur:
+            print("[已取消]")
+            return
+        print("→ 第二次文件选择：选择上期季度涉农贷款文件")
+        prev = _pick_one_workbook("选择上期季度涉农贷款文件")
+        if not prev:
+            print("[已取消]")
+            return
+        normal_files, com_files = _split_sources_for_auto_route([cur, prev])
+        print(f"→ 自动路由：非COM={len(normal_files)}，COM(.xls)={len(com_files)}")
+        try:
+            if cur.suffix.lower() == ".xls" or prev.suffix.lower() == ".xls":
+                r = run_adjust_rural_loan_quarterly_com(cur, prev, g.log_dir)
+            else:
+                r = run_adjust_rural_loan_quarterly(cur, prev, g.log_dir)
+        except RuntimeError as e:
+            print(f"[COM 不可用] {e}")
+            return
+        if r["error"]:
+            print(f"[失败] {r['error']}")
+            return
+        print(
+            f"[完成] 地区={len(r['regions'])} 匹配机构={r['matched']} "
+            f"分机构合计={r['fill_total']:.2f} 分地区合计={r['area_total']:.2f} "
+            f"{'校验通过' if r['consistent'] else '存在不一致'}"
+        )
+        for item in r["regions"]:
+            if item["error"]:
+                print(f"  {item['region']}：{item['error']}")
+            else:
+                print(
+                    f"  {item['region']}：分机构={item['fill_total']:.2f} "
+                    f"分地区={item['area_total']:.2f} "
+                    f"{'通过' if item['consistent'] else '不一致'}"
+                )
+                if item["unmatched_current"]:
+                    print("    本期未匹配：" + "、".join(item["unmatched_current"]))
+                if item["previous_only"]:
+                    print("    上期独有：" + "、".join(item["previous_only"]))
     elif choice == "s22":
         tmpl = _pick_one_workbook("选择批注汇总模板文件")
         if not tmpl:
@@ -1412,12 +1667,12 @@ def main() -> None:
                 "4": "p8", "5": "ppdf",
             }[sub]
         elif main_choice == "4":
-            sub = _show_sub_menu(CONVERT_MENU, ("1", "2", "3", "4", "5", "6", "7", "8", "9", "0"))
+            sub = _show_sub_menu(CONVERT_MENU, ("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "0"))
             if sub == "0":
                 continue
             mapped = {
                 "1": "t3", "2": "t4", "3": "t5", "4": "t7com",
-                "5": "t8", "6": "t9", "7": "t10", "8": "t11", "9": "t12",
+                "5": "t8", "6": "t9", "7": "t10", "8": "t11", "9": "t12", "10": "t13",
             }[sub]
         elif main_choice == "5":
             sub = _show_sub_menu(CONFIG_MENU, ("1", "2", "0"))
@@ -1430,11 +1685,11 @@ def main() -> None:
                 continue
             mapped = {"1": "s21com", "2": "s22com"}[sub]
         elif main_choice == "7":
-            sub = _show_sub_menu(PENDING_MENU, ("1", "2", "3", "4", "5", "6", "7", "0"))
+            sub = _show_sub_menu(PENDING_MENU, ("1", "2", "3", "4", "5", "6", "7", "8", "0"))
             if sub == "0":
                 continue
             mapped = {"1": "x11", "2": "x12", "3": "x13", "4": "x14com",
-                      "5": "x15", "6": "x16com", "7": "x18"}[sub]
+                      "5": "x15", "6": "x16com", "7": "x18", "8": "x19"}[sub]
         elif main_choice == "8":
             sub = _show_sub_menu(ARCHIVE_MENU, ("1", "2", "3", "4", "5", "0"))
             if sub == "0":
@@ -1444,10 +1699,10 @@ def main() -> None:
                 "4": "ar_date_copy", "5": "ar_type_copy",
             }[sub]
         else:
-            sub = _show_sub_menu(QUICK_MENU, ("1", "2", "0"))
+            sub = _show_sub_menu(QUICK_MENU, ("1", "2", "3", "0"))
             if sub == "0":
                 continue
-            mapped = {"1": "q1", "2": "q2"}[sub]
+            mapped = {"1": "q1", "2": "q2", "3": "q3"}[sub]
 
         try:
             dispatch(mapped)

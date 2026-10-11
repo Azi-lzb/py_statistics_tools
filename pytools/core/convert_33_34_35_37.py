@@ -41,7 +41,9 @@ def _workbook_supported(path: Path) -> bool:
 
 
 def _excel_like(path: Path) -> bool:
-    return path.suffix.lower() in (".xls", ".xlsx", ".xlsm", ".xlsb", ".xlt", ".xltx", ".xltm", ".csv")
+    return path.suffix.lower() in (
+        ".xls", ".xlsx", ".xlsm", ".xlsb", ".xlt", ".xltx", ".xltm", ".et", ".ett", ".csv",
+    )
 
 
 def _load_config_rename_df(cfg_path: Path) -> pd.DataFrame:
@@ -440,6 +442,112 @@ def run_file_sort_prefix_49(cfg_path: Path, files: list[Path], output_dir: Path,
         "files": len(files),
         "renamed": renamed,
         "unmatched": unmatched,
+        "skipped": skipped,
+        "failed": failed,
+    }
+
+
+def run_remove_file_sort_prefix_410(
+    cfg_path: Path, files: list[Path], output_dir: Path, log_dir: Path,
+) -> dict[str, object]:
+    """移除当前 4-9 配置中定义的排序前缀，并兼容其位于内容前缀之后。"""
+    log = get_logger("4_10_remove_file_sort_prefix", log_dir)
+    rules = _load_file_sort_rules(cfg_path)
+    if not rules:
+        raise ValueError("文件排序配置 没有启用且有效的排序规则。")
+    prefixes = sorted({str(rule["prefix"]) for rule in rules}, key=len, reverse=True)
+    try:
+        content_spec_items = _parse_sheet_cell_spec(
+            str(_load_content_rename_config(cfg_path).get("spec") or "")
+        )
+    except Exception:
+        content_spec_items = []
+    rows: list[dict[str, object]] = []
+    renamed = skipped = failed = 0
+    content_com_app = None
+
+    for p in files:
+        row = {
+            "源文件路径": str(p),
+            "原文件名": p.name,
+            "新文件名": "",
+            "状态": "",
+            "备注": "",
+        }
+        if not p.exists() or not p.is_file():
+            skipped += 1
+            row["状态"] = "跳过：非文件"
+            rows.append(row)
+            continue
+
+        prefix = next((item for item in prefixes if p.name.startswith(f"{item}_")), "")
+        if prefix:
+            base_name = p.name[len(prefix) + 1:]
+            status = "已取消排序前缀"
+        else:
+            base_name = ""
+            status = ""
+            # 兼容 4-9 → 4-5：内容前缀在前，排序前缀位于其后。
+            for item in prefixes:
+                token = f"_{item}_"
+                pos = p.name.find(token)
+                if pos < 1 or not content_spec_items:
+                    continue
+                try:
+                    if p.suffix.lower() in (".xls", ".xlt"):
+                        if content_com_app is None:
+                            content_com_app, _ = _start_excel_app()
+                        values = _read_cells_com(content_com_app, p, content_spec_items)
+                    else:
+                        values = _read_cells_openpyxl(p, content_spec_items)
+                    content_items = _content_prefix_items(values)
+                except Exception:
+                    continue
+                if not content_items:
+                    continue
+                content_prefix = p.name[:pos + 1]
+                probe = f"{content_prefix}__probe__.xlsx"
+                if _remove_content_prefix(probe, content_items) != "__probe__.xlsx":
+                    continue
+                base_name = f"{content_prefix}{p.name[pos + len(token):]}"
+                status = "已取消排序前缀（保留内容前缀）"
+                break
+        if not base_name:
+            skipped += 1
+            row["状态"] = "跳过：无匹配排序前缀"
+            rows.append(row)
+            continue
+
+        target = p.with_name(base_name)
+        try:
+            if target.exists():
+                target = _next_path(target)
+                status = "目标同名：已自动后缀"
+            os.rename(p, target)
+            renamed += 1
+            row["新文件名"] = target.name
+            row["状态"] = status
+            log.info("ok old=%s new=%s", p.name, target.name)
+        except Exception as e:
+            failed += 1
+            row["状态"] = "失败"
+            row["备注"] = str(e)
+            log.warning("failed file=%s err=%s", p, e)
+        rows.append(row)
+
+    if content_com_app is not None:
+        try:
+            content_com_app.Quit()
+        except Exception:
+            pass
+
+    out_path = output_dir / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_取消文件排序前缀结果.xlsx"
+    write_workbook(out_path, {"取消文件排序前缀结果": pd.DataFrame(rows)})
+    return {
+        "output": str(out_path),
+        "rules": len(rules),
+        "files": len(files),
+        "renamed": renamed,
         "skipped": skipped,
         "failed": failed,
     }
@@ -880,12 +988,17 @@ _EXCEL_FMT_MAP = {
 }
 
 
-def _start_excel_app():
-    app, engine = _dispatch_first([
-        "Excel.Application",      # Microsoft Excel
+def _start_excel_app(prefer_wps: bool = False):
+    prog_ids = [
         "ket.Application",        # WPS 表格（常见）
         "KET.Application",        # WPS 表格（大小写变体）
-    ])
+        "Excel.Application",      # Microsoft Excel
+    ] if prefer_wps else [
+        "Excel.Application",
+        "ket.Application",
+        "KET.Application",
+    ]
+    app, engine = _dispatch_first(prog_ids)
     app.Visible = False
     app.DisplayAlerts = False
     for attr, val in (("ScreenUpdating", False), ("EnableEvents", False),
@@ -939,7 +1052,8 @@ def run_excel_convert_34(
     if not valid:
         return {"ok": 0, "skip": skip, "target_ext": ext, "engine": ""}
 
-    app, engine = _start_excel_app()
+    prefer_wps = any(src.suffix.lower() in (".et", ".ett") for src, _ in valid)
+    app, engine = _start_excel_app(prefer_wps=prefer_wps)
     try:
         for src, out_path in valid:
             try:
@@ -1144,6 +1258,19 @@ def _remove_content_prefix(file_name: str, prefix_items: list[str]) -> str | Non
     return f"{stem}{suffix}"
 
 
+def _remove_content_prefix_keep_sort_prefix(
+    file_name: str, prefix_items: list[str], sort_prefixes: list[str],
+) -> str | None:
+    """回退内容前缀时，保留 4-9 已添加且仍在配置中的排序前缀。"""
+    for sort_prefix in sort_prefixes:
+        leading = f"{sort_prefix}_"
+        if not file_name.startswith(leading):
+            continue
+        restored = _remove_content_prefix(file_name[len(leading):], prefix_items)
+        return f"{leading}{restored}" if restored else None
+    return _remove_content_prefix(file_name, prefix_items)
+
+
 def _parse_sheet_cell_spec(spec: str) -> list[tuple[str, str]]:
     parts = [x.strip() for x in spec.replace("；", ";").split(";") if x and x.strip()]
     out: list[tuple[str, str]] = []
@@ -1340,6 +1467,15 @@ def run_batch_unrename_by_content_47(cfg_path: Path, files: list[Path], log_dir:
     spec_cfg = _load_content_rename_config(cfg_path)
     spec_text = str(spec_cfg.get("spec") or "")
     items = _parse_sheet_cell_spec(spec_text)
+    try:
+        sort_prefixes = sorted(
+            {str(rule["prefix"]) for rule in _load_file_sort_rules(cfg_path)},
+            key=len,
+            reverse=True,
+        )
+    except Exception:
+        # 旧配置文件可能尚未创建“文件排序配置”，此时保持原有 4-6 行为。
+        sort_prefixes = []
 
     ok = skip = 0
     com_candidates: list[Path] = []
@@ -1354,7 +1490,7 @@ def run_batch_unrename_by_content_47(cfg_path: Path, files: list[Path], log_dir:
         try:
             vals = _read_cells_openpyxl(p, items)
             prefix_items = _content_prefix_items(vals)
-            new_name = _remove_content_prefix(p.name, prefix_items)
+            new_name = _remove_content_prefix_keep_sort_prefix(p.name, prefix_items, sort_prefixes)
             if not new_name:
                 skip += 1
                 log.info(
@@ -1380,7 +1516,7 @@ def run_batch_unrename_by_content_47(cfg_path: Path, files: list[Path], log_dir:
                 try:
                     vals = _read_cells_com(app, p, items)
                     prefix_items = _content_prefix_items(vals)
-                    new_name = _remove_content_prefix(p.name, prefix_items)
+                    new_name = _remove_content_prefix_keep_sort_prefix(p.name, prefix_items, sort_prefixes)
                     if not new_name:
                         skip += 1
                         log.info(

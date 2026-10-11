@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 构建产物
+build/
+.pyinstaller-cache-win7/
+
+# 运行时输出
+logs/
+dist/logs/
+dist/output/
+output/
+tmp_*/
+
+# 本地杂项
+cache/
+.vscode/

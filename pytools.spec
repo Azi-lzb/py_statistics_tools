@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = []
+datas = [('版本管理/VERSION_MANIFEST.json', '版本管理')]
 binaries = []
 hiddenimports = []
 tmp_ret = collect_all('pandas')

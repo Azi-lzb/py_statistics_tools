@@ -17,41 +17,32 @@ if exist "%PY_EXE_HZPBC%" (
   )
 )
 
+rem Read product version (VERSION_MANIFEST.json is the single source of truth)
+set "VERSION="
 if defined PY_CMD (
-  "%PY_CMD%" -m PyInstaller ^
-  --onefile ^
-  --name pytools ^
-  --noupx ^
-  --clean ^
-  --noconfirm ^
-  --paths . ^
-  --collect-all pandas ^
-  --exclude-module matplotlib ^
-  --exclude-module IPython ^
-  --exclude-module jupyter ^
-  --exclude-module notebook ^
-  --exclude-module pytest ^
-  --exclude-module setuptools ^
-  --exclude-module tests ^
-  pytools_entry.py
+  for /f "usebackq delims=" %%i in (`"%PY_CMD%" -m PyCode.core.app_identity --version 2^>nul`) do set "VERSION=%%i"
 ) else (
-  py -3 -m PyInstaller ^
-  --onefile ^
-  --name pytools ^
-  --noupx ^
-  --clean ^
-  --noconfirm ^
-  --paths . ^
-  --collect-all pandas ^
-  --exclude-module matplotlib ^
-  --exclude-module IPython ^
-  --exclude-module jupyter ^
-  --exclude-module notebook ^
-  --exclude-module pytest ^
-  --exclude-module setuptools ^
-  --exclude-module tests ^
-  pytools_entry.py
+  for /f "usebackq delims=" %%i in (`py -3 -m PyCode.core.app_identity --version 2^>nul`) do set "VERSION=%%i"
 )
+if not defined VERSION (
+  echo [WARN] failed to read version, timestamped copy keeps legacy naming
+)
+
+rem Keep the previous exe until the new build succeeds
+if exist "dist\pytools.exe" move /y "dist\pytools.exe" "dist\pytools_prev.tmp" >nul
+
+if defined PY_CMD (
+  "%PY_CMD%" -m PyInstaller --clean --noconfirm pytools.spec
+) else (
+  py -3 -m PyInstaller --clean --noconfirm pytools.spec
+)
+
+if errorlevel 1 (
+  if exist "dist\pytools_prev.tmp" move /y "dist\pytools_prev.tmp" "dist\pytools.exe" >nul
+  echo [ERROR] PyInstaller build failed
+  exit /b 1
+)
+if exist "dist\pytools_prev.tmp" del /q "dist\pytools_prev.tmp" >nul
 
 if not exist "dist\pytools.exe" (
   echo [WARN] dist\pytools.exe not found
@@ -66,11 +57,17 @@ if exist "%TS_FILE%" (
   del /q "%TS_FILE%" >nul 2>&1
 )
 
-if defined TS (
+if defined TS if defined VERSION (
+  copy /y "dist\pytools.exe" "dist\pytools V%VERSION%_%TS%.exe" >nul
+  echo [OK] built dist\pytools.exe
+  echo [OK] built dist\pytools V%VERSION%_%TS%.exe
+)
+if defined TS if not defined VERSION (
   copy /y "dist\pytools.exe" "dist\pytools_%TS%.exe" >nul
   echo [OK] built dist\pytools.exe
   echo [OK] built dist\pytools_%TS%.exe
-) else (
+)
+if not defined TS (
   echo [OK] built dist\pytools.exe
   echo [WARN] timestamp suffix copy skipped
 )

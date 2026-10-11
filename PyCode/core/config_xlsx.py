@@ -16,7 +16,6 @@ SHEET_EXTRACT_CONFIG = "工作表提取"
 SHEET_ARCHIVE_TYPE_CONFIG = "归档类型配置"
 SHEET_SUBMISSION_CHECK_CONFIG = "提交检查配置"
 SHEET_FILE_SORT_CONFIG = "文件排序配置"
-SHEET_VALIDATION_RULE_MAP = "校验规则映射表"
 
 REQUIRED_GLOBAL_KEYS = ["输入目录", "输出目录", "日志目录"]
 TIMELINE_COLS = [
@@ -67,10 +66,6 @@ SUBMISSION_CHECK_CONFIG_COLS = [
 FILE_SORT_CONFIG_COLS = [
     "是否启用", "排序前缀", "匹配关键词", "备注",
 ]
-VALIDATION_RULE_MAP_COLS = [
-    "是否启用", "校验关系Sheet", "口径", "年份", "表格名称", "表格编码",
-    "指标前缀", "实际行编号", "默认列编号", "备注",
-]
 INSTITUTION_MAPPING_COLS = [
     "原始机构名称", "映射后机构名称", "是否为外资行",
 ]
@@ -119,7 +114,6 @@ FEATURE_REQUIRED = {
     "s22": [SHEET_GLOBAL],
     "s21com": [SHEET_GLOBAL],
     "s22com": [SHEET_GLOBAL],
-    "s24": [SHEET_GLOBAL, SHEET_VALIDATION_RULE_MAP],
     "s25": [SHEET_GLOBAL],
     "x11": [SHEET_GLOBAL],
     "x12": [SHEET_GLOBAL, SHEET_INSTITUTION_MAPPING],
@@ -141,7 +135,6 @@ SHEET_COL_REQUIRED = {
     SHEET_FILE_SORT_CONFIG: FILE_SORT_CONFIG_COLS,
     SHEET_INSTITUTION_MAPPING: INSTITUTION_MAPPING_COLS,
     SHEET_EXTRACT_CONFIG: EXTRACT_CONFIG_COLS,
-    SHEET_VALIDATION_RULE_MAP: VALIDATION_RULE_MAP_COLS,
 }
 FEATURE_SHEET_COL_REQUIRED = {
     ("t3", SHEET_CONFIG_RENAME): ["简称", "全称", "代码", "全称(代码映射)", "键", "值"],
@@ -351,64 +344,6 @@ def load_global_value(cfg_path: Path, key: str, default: str = "") -> str:
         if k == key:
             return _to_str(row.iloc[1]) if df.shape[1] > 1 else default
     return default
-
-
-def _mapping_id_text(value) -> str:
-    text = _to_str(value)
-    try:
-        number = float(text)
-        return str(int(number)) if number.is_integer() else text
-    except (TypeError, ValueError):
-        return text
-
-
-def load_validation_rule_mappings(cfg_path: Path) -> list[dict]:
-    """读取启用的人工校验规则映射行。"""
-    xls = pd.ExcelFile(cfg_path)
-    if SHEET_VALIDATION_RULE_MAP not in xls.sheet_names:
-        raise ValueError(f"缺少配置Sheet: {SHEET_VALIDATION_RULE_MAP}")
-    df = pd.read_excel(cfg_path, SHEET_VALIDATION_RULE_MAP, header=0, dtype=object)
-    mappings: list[dict] = []
-    errors: list[str] = []
-    for index, row in df.iterrows():
-        if not _truthy(row.get("是否启用")):
-            continue
-        row_no = index + 2
-        relation_sheet = _to_str(row.get("校验关系Sheet"))
-        caliber = _to_str(row.get("口径")).upper()
-        year = _mapping_id_text(row.get("年份"))
-        table_name = _to_str(row.get("表格名称"))
-        table_code = _to_str(row.get("表格编码")).strip("[] ")
-        indicator = _mapping_id_text(row.get("指标前缀"))
-        actual_row = _mapping_id_text(row.get("实际行编号"))
-        default_column = _to_str(row.get("默认列编号")).upper()
-        missing = [
-            name for name, value in (
-                ("校验关系Sheet", relation_sheet), ("口径", caliber),
-                ("年份", year), ("表格名称", table_name), ("表格编码", table_code),
-                ("指标前缀", indicator), ("实际行编号", actual_row),
-            ) if not value
-        ]
-        if missing:
-            errors.append(f"第{row_no}行缺少: {','.join(missing)}")
-            continue
-        mappings.append({
-            "row_no": row_no,
-            "relation_sheet": relation_sheet,
-            "caliber": caliber,
-            "year": year,
-            "table_name": table_name,
-            "table_code": table_code,
-            "indicator": indicator,
-            "actual_row": actual_row,
-            "default_column": default_column,
-            "remark": _to_str(row.get("备注")),
-        })
-    if errors:
-        raise ValueError("校验规则映射表配置不完整；" + "；".join(errors))
-    if not mappings:
-        raise ValueError("校验规则映射表没有启用的映射")
-    return mappings
 
 
 def load_timeline_rules(cfg_path: Path) -> list[TimelineRule]:

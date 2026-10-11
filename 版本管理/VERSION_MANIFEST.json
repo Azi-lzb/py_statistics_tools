@@ -1,0 +1,10 @@
+{
+  "product": {
+    "id": "pytools",
+    "name": "pytools",
+    "version": "1.0.0",
+    "version_scheme": "MAJOR.MINOR.PATCH：PATCH=不改变功能的修复/优化；MINOR=向后兼容的新增功能；MAJOR=不兼容的结构/契约变化。"
+  },
+  "baseline_note": "v1.0.0 为版本管理体系建立时的基线版本；此前历史修改未逐项倒推版本号，可通过 Git 历史追溯。",
+  "changelog": "版本管理/CHANGELOG.md"
+}

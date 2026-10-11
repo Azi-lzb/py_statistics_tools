@@ -84,6 +84,7 @@ from PyCode.core.feature_1_3_remove_foreign_bank_com import run_remove_foreign_b
 from PyCode.core.feature_1_5_region_sum_check_com import run_region_sum_check_com
 from PyCode.core.feature_1_8_adjust_rural_loan_com import run_adjust_rural_loan_com
 from PyCode.core.feature_1_9_adjust_rural_loan_quarterly_com import run_adjust_rural_loan_quarterly_com
+from PyCode.core.app_identity import app_title
 
 def _app_base_dir() -> Path:
 
@@ -94,8 +95,13 @@ def _app_base_dir() -> Path:
 
 CFG_PATH = _app_base_dir() / "config" / "config.xlsx"
 
-MAIN_MENU = """
-======== pytools 菜单 ========
+try:
+    _APP_TITLE = app_title()
+except Exception:
+    _APP_TITLE = "pytools"
+
+MAIN_MENU = f"""
+======== {_APP_TITLE} 菜单 ========
   1  时序工具
   2  去重工具
   3  打印工具

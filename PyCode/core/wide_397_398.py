@@ -134,7 +134,9 @@ def run_wide_summary(rules: list[TimelineRule], path_maps: list[PathMapRule],
     # rule_name -> dict[(wb,sheet,date,row_path)] -> dict[col_path] -> value
     by_rule: dict[str, dict[tuple, dict[str, object]]] = {}
     set_values_by_rule: dict[str, dict[tuple, list[object]]] = {}
+    row_no_by_rule: dict[str, dict[tuple, object]] = {}
     rule_output_rowpath: dict[str, bool] = {}
+    rule_output_rowno: dict[str, bool] = {}
     rule_set_headers: dict[str, list[str]] = {}
     rule_set_addrs: dict[str, list[str]] = {}
     # 列顺序按首见
@@ -248,6 +250,9 @@ def run_wide_summary(rules: list[TimelineRule], path_maps: list[PathMapRule],
                         row_path_out = ec.row_path if include_row_path else ""
                         key = (ec.source_file, ec.sheet_name, ec.data_date, row_path_out, row_unique)
                         row_dict = bucket.setdefault(key, {})
+                        rule_output_rowno.setdefault(ec.rule_name, bool(getattr(rule, "output_row_no", False)))
+                        if rule_output_rowno[ec.rule_name]:
+                            row_no_by_rule.setdefault(ec.rule_name, {}).setdefault(key, row_no or "")
                         if set_headers and key not in set_values_by_rule.setdefault(ec.rule_name, {}):
                             set_values_by_rule.setdefault(ec.rule_name, {})[key] = list(set_vals)
                         if ec.col_path in row_dict:
@@ -278,19 +283,26 @@ def run_wide_summary(rules: list[TimelineRule], path_maps: list[PathMapRule],
     total_rows = 0
     for rule_name, bucket in by_rule.items():
         include_row_path = rule_output_rowpath.get(rule_name, True)
+        include_row_no = rule_output_rowno.get(rule_name, False)
+        row_nos = row_no_by_rule.get(rule_name, {}) if include_row_no else {}
         set_headers = rule_set_headers.get(rule_name, [])
         if include_row_path:
             fixed_cols = ["工作簿名", "工作表名", "数据日期"] + set_headers + ["行头路径"]
         else:
             fixed_cols = ["工作簿名", "工作表名", "数据日期"] + set_headers
+        if include_row_no:
+            fixed_cols = fixed_cols + ["行序号"]
         cols = fixed_cols + col_order[rule_name]
         rows: list[list] = []
         for (wb, sn, dt, rp, _ru), m in bucket.items():
-            set_vals = set_values_by_rule.get(rule_name, {}).get((wb, sn, dt, rp, _ru), [""] * len(set_headers))
+            kk = (wb, sn, dt, rp, _ru)
+            set_vals = set_values_by_rule.get(rule_name, {}).get(kk, [""] * len(set_headers))
+            row = [wb, sn, dt] + list(set_vals)
             if include_row_path:
-                row = [wb, sn, dt] + list(set_vals) + [rp] + [m.get(cp, "") for cp in col_order[rule_name]]
-            else:
-                row = [wb, sn, dt] + list(set_vals) + [m.get(cp, "") for cp in col_order[rule_name]]
+                row.append(rp)
+            if include_row_no:
+                row.append(row_nos.get(kk, ""))
+            row.extend(m.get(cp, "") for cp in col_order[rule_name])
             rows.append(row)
         df = pd.DataFrame(rows, columns=cols)
         sheets[rule_name or "未命名规则"] = df

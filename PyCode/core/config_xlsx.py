@@ -24,8 +24,9 @@ TIMELINE_COLS = [
     "必含列头", "必含行头",
     "数据起始行", "数据结束行", "数据起始列", "数据结束列",
     "跳过关键字", "目标工作簿路径", "目标工作表", "启用目标写入", "set区域", "目标去重列",
+    "是否输出行序号",
 ]
-TIMELINE_REQUIRED_COLS = [c for c in TIMELINE_COLS if c not in ("启用目标写入", "set区域", "目标去重列")]
+TIMELINE_REQUIRED_COLS = [c for c in TIMELINE_COLS if c not in ("启用目标写入", "set区域", "目标去重列", "是否输出行序号")]
 PATH_MAP_COLS = [
     "是否启用", "映射名称", "适用规则名",
     "工作簿关键字", "工作表关键字",
@@ -185,6 +186,7 @@ class TimelineRule:
     set_items: list[tuple[str, str]] = field(default_factory=list)  # [(alias, addr)]
     set_parse_error: str = ""
     target_dedup_cols: list[str] = field(default_factory=list)
+    output_row_no: bool = False
 
 
 @dataclass
@@ -405,6 +407,7 @@ def load_timeline_rules(cfg_path: Path) -> list[TimelineRule]:
             set_items=set_items,
             set_parse_error=set_err,
             target_dedup_cols=_split(row.get("目标去重列")),
+            output_row_no=_truthy(row.get("是否输出行序号")),
         ))
     return rules
 

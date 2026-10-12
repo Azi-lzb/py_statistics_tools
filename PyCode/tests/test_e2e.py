@@ -184,8 +184,8 @@ def test_3_4_wide_suffix_diff(env):
     may_no = df_no[_date_col_text(df_no["数据日期"]) == "2026-05-31"]["行头路径"].tolist()
     # 加后缀模式：保留 2 行（活期_1, 活期_2）
     assert sum(1 for r in may_with if r.startswith("活期")) == 2
-    # 不加后缀模式：合并冲突，只剩 1 行（保留首值）
-    assert may_no.count("活期") == 1
+    # 不加后缀模式：内部 #R 行号区分，同名行同样保留 2 行
+    assert may_no.count("活期") == 2
 
 
 def test_wide_target_write_dedup_ignores_workbook_name(env):
@@ -266,6 +266,5 @@ def test_1_compare_pass_and_diff(env):
     sources = sorted(g.input_dir.glob("*.xlsx"))
     out = run_compare(tmpl, sources, rules, g)
     assert out.exists()
-    diff = pd.read_excel(out, sheet_name="差异明细")
-    types = set(diff["差异类型"])
-    assert "位置" in types
+    diff = pd.read_excel(out, sheet_name="表头比对结果")
+    assert "按位置" in set(diff["备注"])

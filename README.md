@@ -1,6 +1,6 @@
 # pytools（通用汇总工具）
 
-面向 Excel 场景的批处理工具，提供时序提取、去重、打印、转换、汇总、归档和专项处理能力。常用 Excel 功能已改为自动路由：`.xlsx/.xlsm` 优先走普通处理逻辑，`.xls` 自动走 COM 逻辑。
+面向 Excel 场景的批处理工具，提供时序提取、去重、打印、转换、汇总、归档和专项处理能力。默认使用 Office 模式；可在 `4` → `11` 切换到非 Office 模式。
 
 ## 目录结构
 
@@ -17,6 +17,17 @@
 ```bash
 python pytools_entry.py
 ```
+
+Windows 上也可双击根目录的 `启动开发版.bat`，它会选择已安装运行依赖的 Python 环境并直接运行源码，不启动 `dist/` 中的打包程序。
+
+Windows 开发环境建议使用 Python 3.10 或更新版本，在项目根目录运行：
+
+```bat
+py -3 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+```
+
+`requirements.txt` 是跨平台运行依赖；`requirements-dev.txt` 另含测试和 PyInstaller 打包工具。Windows Office 模式通过 `pywin32` 调用 Excel/WPS COM。
 
 运行后按菜单选择功能：
 
@@ -40,7 +51,31 @@ python pytools_entry.py
 build_exe.bat
 ```
 
-默认使用 PyInstaller 生成单文件程序（`--onefile`）。
+默认使用 PyInstaller 生成单文件程序（`--onefile`）。可编辑的配置文件单独放在 `dist/config/config.xlsx`；分发时请将 exe 与 `config` 目录一起提供。打包脚本会在该配置缺失时复制默认配置，已有配置不会被覆盖。
+
+### Linux / 银河麒麟 V10 SP1
+
+Linux `.deb` 按构建机架构生成（amd64 或 arm64）。为兼容麒麟 V10 SP1，冻结文件审计上限设为 GLIBC 2.28 / GLIBCXX 3.4.24：
+
+```bash
+bash packaging/linux/build_deb.sh
+```
+
+脚本在 `dist/linux/` 生成 `.deb` 与 SHA-256 文件。安装时使用：
+
+```bash
+sudo apt install ./dist/linux/pytools_*.deb
+pytools
+```
+
+Linux 首次启动会将默认配置复制到 `~/.config/pytools/config/config.xlsx`。程序默认使用 Office 模式：
+
+- **Office 模式**：Windows 的表格操作按功能使用 Excel/WPS COM；Linux 的 Excel/Word 格式转换使用 LibreOffice Calc/Writer（安装 `libreoffice-calc`、`libreoffice-writer`）。Linux 上没有对应 LibreOffice 实现的操作会使用现有 Python 实现。
+- **非 Office 模式**：只使用 pandas/openpyxl/xlrd/pyxlsb 等 Python 库，不调用 COM 或 LibreOffice。Excel 转换支持导出 `.xlsx` 和 `.csv`；Word 格式转换不在此模式提供。
+
+运行中可在 `4` → `11` 切换到非 Office 模式；该切换仅对当前运行有效，重新启动后默认回到 Office 模式。
+
+Linux 上 LibreOffice 是可选系统依赖；仅 Office 模式的 Excel/Word 格式转换需要它。Python 模式转换 `.xlsm` 为 `.xlsx` 会丢弃 VBA 宏；导出 CSV 只取第一个工作表，且不保留单元格格式。
 
 ## 功能说明
 
@@ -68,9 +103,9 @@ build_exe.bat
 ### 4. 转换工具
 
 - 批量重命名文件
-- 批量 Excel 格式转换（COM）
-- 批量 Word 格式转换（COM）
-- 批量修改 Sheet 名（自动路由 COM）
+- 批量 Excel 格式转换（按所选模式）
+- 批量 Word 格式转换（Office 模式）
+- 批量修改 Sheet 名（按所选模式）
 - 根据文件内容重命名 / 取消内容前缀
 - 批量局部映射重命名文件
 

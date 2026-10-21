@@ -5,6 +5,9 @@ import os
 import re
 import gc
 import shutil
+import subprocess
+import sys
+import tempfile
 from datetime import datetime
 
 import pandas as pd
@@ -24,6 +27,11 @@ from .logger import get_logger
 def _norm(v) -> str:
     if v is None:
         return ""
+    try:
+        if pd.isna(v):
+            return ""
+    except (TypeError, ValueError):
+        pass
     return str(v).strip()
 
 
@@ -988,6 +996,54 @@ _EXCEL_FMT_MAP = {
 }
 
 
+def _selected_engine_mode() -> str:
+    mode = os.environ.get("PYTOOLS_MODE", "office").strip().lower()
+    return mode if mode in {"office", "python"} else "office"
+
+
+def _python_sheet_name(value: object, used: set[str]) -> str:
+    base = re.sub(r"[\\/*?:\[\]]", "_", str(value)).strip()[:31] or "Sheet"
+    name = base
+    index = 1
+    while name.lower() in used:
+        suffix = f"_{index}"
+        name = f"{base[:31 - len(suffix)]}{suffix}"
+        index += 1
+    used.add(name.lower())
+    return name
+
+
+def _python_excel_convert_one(src: Path, out: Path, target_ext: str) -> None:
+    source_ext = src.suffix.lower()
+    supported_sources = {".xlsx", ".xlsm", ".xls", ".xlsb", ".csv"}
+    if source_ext not in supported_sources:
+        raise ValueError(f"Python 模式不支持源格式 {source_ext}")
+
+    if target_ext == "xlsx":
+        if source_ext == ".xlsx":
+            shutil.copy2(src, out)
+        elif source_ext == ".xlsm":
+            load_workbook(src, keep_vba=False).save(out)
+        elif source_ext == ".csv":
+            pd.read_csv(src).to_excel(out, index=False, engine="openpyxl")
+        else:
+            used: set[str] = set()
+            with pd.ExcelFile(src) as workbook, pd.ExcelWriter(out, engine="openpyxl") as writer:
+                for sheet in workbook.sheet_names:
+                    frame = workbook.parse(sheet_name=sheet)
+                    frame.to_excel(writer, sheet_name=_python_sheet_name(sheet, used), index=False)
+        return
+
+    if target_ext == "csv":
+        if source_ext == ".csv":
+            shutil.copy2(src, out)
+        else:
+            pd.read_excel(src, sheet_name=0).to_csv(out, index=False, encoding="utf-8-sig")
+        return
+
+    raise ValueError(f"Python 模式不支持导出 .{target_ext}")
+
+
 def _start_excel_app(prefer_wps: bool = False):
     prog_ids = [
         "ket.Application",        # WPS 表格（常见）
@@ -1022,6 +1078,58 @@ def _excel_convert_one(app, src: Path, out: Path, target_ext: str) -> None:
         wb.Close(SaveChanges=False)
 
 
+_LIBREOFFICE_EXCEL_FILTERS = {
+    "xls": "MS Excel 97",
+    "xlsx": "Calc MS Excel 2007 XML",
+    "xlsm": "Calc MS Excel 2007 VBA XML",
+    "csv": "Text - txt - csv (StarCalc)",
+    "xlt": "MS Excel 97 Vorlage/Template",
+    "xltx": "Calc MS Excel 2007 XML Template",
+    "xltm": "Calc MS Excel 2007 XML Template",
+}
+_LIBREOFFICE_WORD_FILTERS = {
+    "doc": "MS Word 97",
+    "docx": "Office Open XML Text",
+}
+
+
+def _libreoffice_executable() -> str:
+    executable = shutil.which("soffice") or shutil.which("libreoffice")
+    if executable:
+        return executable
+    opt_installations = sorted(Path("/opt").glob("libreoffice*/program/soffice"), reverse=True)
+    for candidate in opt_installations:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    raise RuntimeError("Linux 格式转换需要 LibreOffice；请安装 LibreOffice Calc/Writer 后重试。")
+
+
+def _libreoffice_convert_one(
+    executable: str, src: Path, out: Path, target_ext: str, output_filter: str,
+) -> None:
+    with tempfile.TemporaryDirectory(prefix="pytools-libreoffice-") as temp_dir:
+        temp_root = Path(temp_dir)
+        output_dir = temp_root / "out"
+        output_dir.mkdir()
+        profile_uri = (temp_root / "profile").as_uri()
+        result = subprocess.run(
+            [
+                executable, "--headless", "--nologo", "--nodefault", "--nolockcheck",
+                "--nofirststartwizard", f"-env:UserInstallation={profile_uri}",
+                "--convert-to", f"{target_ext}:{output_filter}", "--outdir", str(output_dir), str(src),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+        converted = output_dir / f"{src.stem}.{target_ext}"
+        if result.returncode != 0 or not converted.exists():
+            details = (result.stderr or result.stdout).strip()
+            raise RuntimeError(details or f"LibreOffice 未生成 {converted.name}")
+        shutil.move(str(converted), str(out))
+
+
 def run_excel_convert_34(
     files: list[Path], target_format: str, log_dir: Path
 ) -> dict[str, int]:
@@ -1029,6 +1137,9 @@ def run_excel_convert_34(
     ext = _norm(target_format).lower().lstrip(".") or "xlsx"
     if ext not in _EXCEL_FMT_MAP:
         ext = "xlsx"
+    mode = _selected_engine_mode()
+    if mode == "python" and ext not in {"xlsx", "csv"}:
+        raise RuntimeError("非 Office 模式的 Excel 导出仅支持 .xlsx 和 .csv。")
 
     # 预筛有效文件，避免为 0 个有效文件也启动 Excel
     valid: list[tuple[Path, Path]] = []
@@ -1050,7 +1161,33 @@ def run_excel_convert_34(
         valid.append((p, out_path))
 
     if not valid:
-        return {"ok": 0, "skip": skip, "target_ext": ext, "engine": ""}
+        return {"ok": 0, "skip": skip, "target_ext": ext, "engine": "Python" if mode == "python" else ""}
+
+    if mode == "python":
+        for src, out_path in valid:
+            try:
+                _python_excel_convert_one(src, out_path, ext)
+                ok += 1
+                log.info("ok src=%s out=%s engine=Python", src, out_path)
+            except Exception as e:
+                skip += 1
+                log.warning("skip file=%s reason=convert_failed err=%s", src, e)
+        return {"ok": ok, "skip": skip, "target_ext": ext, "engine": "Python"}
+
+    if sys.platform.startswith("linux"):
+        output_filter = _LIBREOFFICE_EXCEL_FILTERS.get(ext)
+        if not output_filter:
+            raise RuntimeError(f"Linux 版 LibreOffice 不支持导出 .{ext}；请改用 xls、xlsx、xlsm 或 csv。")
+        executable = _libreoffice_executable()
+        for src, out_path in valid:
+            try:
+                _libreoffice_convert_one(executable, src, out_path, ext, output_filter)
+                ok += 1
+                log.info("ok src=%s out=%s engine=LibreOffice", src, out_path)
+            except Exception as e:
+                skip += 1
+                log.warning("skip file=%s reason=convert_failed err=%s", src, e)
+        return {"ok": ok, "skip": skip, "target_ext": ext, "engine": "LibreOffice"}
 
     prefer_wps = any(src.suffix.lower() in (".et", ".ett") for src, _ in valid)
     app, engine = _start_excel_app(prefer_wps=prefer_wps)
@@ -1128,6 +1265,22 @@ def run_word_convert_36(
 
     if not valid:
         return {"ok": 0, "skip": skip, "target_ext": ext, "engine": ""}
+
+    if _selected_engine_mode() == "python":
+        raise RuntimeError("非 Office 模式不提供 Word 格式转换；请切换到 Office 模式。")
+
+    if sys.platform.startswith("linux"):
+        output_filter = _LIBREOFFICE_WORD_FILTERS[ext]
+        executable = _libreoffice_executable()
+        for src, out_path in valid:
+            try:
+                _libreoffice_convert_one(executable, src, out_path, ext, output_filter)
+                ok += 1
+                log.info("ok src=%s out=%s engine=LibreOffice", src, out_path)
+            except Exception as e:
+                skip += 1
+                log.warning("skip file=%s reason=convert_failed err=%s", src, e)
+        return {"ok": ok, "skip": skip, "target_ext": ext, "engine": "LibreOffice"}
 
     app, engine = _start_word_app()
     try:

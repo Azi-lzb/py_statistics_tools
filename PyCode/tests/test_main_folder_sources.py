@@ -29,8 +29,8 @@ def test_collect_excel_files_recursively(tmp_path: Path):
     nested.mkdir()
     (nested / "child.xls").touch()
 
-    assert [str(p.relative_to(tmp_path)) for p in _collect_excel_files(tmp_path, recursive=True)] == [
-        "nested\\child.xls", "root.xlsx",
+    assert [p.relative_to(tmp_path).as_posix() for p in _collect_excel_files(tmp_path, recursive=True)] == [
+        "nested/child.xls", "root.xlsx",
     ]
 
 
@@ -43,8 +43,8 @@ def test_collect_excel_files_from_multiple_folders_deduplicates_nested_sources(t
 
     sources = _collect_excel_files_from_folders([parent, child], recursive=True)
 
-    assert [str(p.relative_to(tmp_path)) for p in sources] == [
-        "parent\\child\\nested.xlsm", "parent\\root.xlsx",
+    assert [p.relative_to(tmp_path).as_posix() for p in sources] == [
+        "parent/child/nested.xlsm", "parent/root.xlsx",
     ]
 
 

@@ -39,13 +39,17 @@ def _next_available_output_path(base_path: Path) -> Path:
 
 def _save_with_suffix_fallback(wb: Workbook, preferred_path: Path) -> Path:
     target = _next_available_output_path(preferred_path)
-    for _ in range(1000):
+    first_candidate = target
+    for attempt in range(1000):
         try:
             wb.save(target)
             return target
         except PermissionError:
             # 文件被占用时继续尝试下一个后缀
-            target = _next_available_output_path(target.with_name(f"{target.stem}_1{target.suffix}"))
+            retry_path = first_candidate.with_name(
+                f"{first_candidate.stem}_{attempt + 1}{first_candidate.suffix}"
+            )
+            target = _next_available_output_path(retry_path)
     raise PermissionError(f"无法保存输出文件（可能持续被占用）: {preferred_path}")
 
 

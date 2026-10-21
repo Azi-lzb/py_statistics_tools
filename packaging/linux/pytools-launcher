@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+: "${HOME:?HOME 未设置}"
+XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
+CONFIG_DIR=$XDG_CONFIG_HOME/pytools/config
+CONFIG_FILE=$CONFIG_DIR/config.xlsx
+
+mkdir -p "$CONFIG_DIR"
+if [ ! -s "$CONFIG_FILE" ]; then
+    cp /usr/share/pytools/config/config.xlsx "$CONFIG_FILE"
+    chmod 600 "$CONFIG_FILE"
+fi
+
+export PYTOOLS_CONFIG_PATH=$CONFIG_FILE
+exec /opt/pytools/pytools "$@"

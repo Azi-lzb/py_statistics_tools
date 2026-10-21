@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=NoComPyTools
+Comment=Python based Excel report processing
+Exec=nocompytools
+Terminal=true
+Categories=Office;Spreadsheet;

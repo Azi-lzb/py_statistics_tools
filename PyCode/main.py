@@ -27,6 +27,7 @@ from PyCode.core.dedup_311 import (
     run_check_by_config,
     run_delete_by_config,
     run_append_by_config,
+    run_precheck_by_config,
 )
 from PyCode.core.config_init import initialize_or_repair_config
 from PyCode.core.print_310 import (
@@ -49,7 +50,6 @@ from PyCode.core.summary_321_322_com import (
     run_summary_by_usedrange_com,
     run_summary_by_comment_com,
 )
-from PyCode.core.survey_stats import run_survey_stats
 from PyCode.core.convert_33_34_35_37 import (
     run_batch_rename_33,
     run_excel_convert_34,
@@ -93,7 +93,8 @@ def _app_base_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
-CFG_PATH = _app_base_dir() / "config" / "config.xlsx"
+CFG_PATH = Path(os.environ.get("PYTOOLS_CONFIG_PATH", _app_base_dir() / "config" / "config.xlsx"))
+ENGINE_MODE = os.environ.get("PYTOOLS_MODE", "").strip().lower()
 
 try:
     _APP_TITLE = app_title()
@@ -128,14 +129,14 @@ ARCHIVE_MENU = """
 
 PENDING_MENU = """
 ------ 一二批处理工具 ------
-  1  [自动路由COM] 拆分村镇银行数据
-  2  [自动路由COM] 机构名称标准化（机构映射表）
-  3  [自动路由COM] 删除分机构表的外资行（机构映射表）
-  4  [自动路由COM] 外汇页眉修改
-  5  [自动路由COM] 地区总分校验
-  6  [自动路由COM] 提取工作表数据（工作表提取）
-  7  [自动路由COM] 涉农贷款比上月修正
-  8  [自动路由COM] 季度涉农贷款比上月修正及分地区核对
+  1  [按模式路由] 拆分村镇银行数据
+  2  [按模式路由] 机构名称标准化（机构映射表）
+  3  [按模式路由] 删除分机构表的外资行（机构映射表）
+  4  [按模式路由] 外汇页眉修改
+  5  [按模式路由] 地区总分校验
+  6  [按模式路由] 提取工作表数据（工作表提取）
+  7  [按模式路由] 涉农贷款比上月修正
+  8  [按模式路由] 季度涉农贷款比上月修正及分地区核对
   0  返回
 ------------------------
 """
@@ -174,15 +175,16 @@ CONFIG_MENU = """
 CONVERT_MENU = """
 ------ 转换工具 ------
   1  批量重命名文件（重命名配置 A:B/D:E/G:H）
-  2  [COM] 批量Excel格式转换（全局配置）
-  3  [COM] 批量Word格式转换（全局配置）
-  4  [自动路由COM] 批量修改Sheet名（重命名配置 J:K）
+  2  [按模式路由] 批量Excel格式转换（全局配置）
+  3  [按模式路由] 批量Word格式转换（全局配置）
+  4  [按模式路由] 批量修改Sheet名（重命名配置 J:K）
   5  根据文件内容重命名（重命名配置 O:P:Q）
   6  取消根据内容重命名前缀（重命名配置 O:P:Q）
   7  批量局部映射重命名文件（重命名配置 M:N）
   8  提交缺失检查（提交检查配置）
   9  文件排序前缀（文件排序配置）
  10  取消文件排序前缀
+ 11  切换到非 Office 模式（Python；不调用 COM/LibreOffice）
   0  返回
 ----------------------
 """
@@ -191,13 +193,6 @@ SUMMARY_MENU = """
 ------ 汇总工具 ------
   1  按使用区域汇总（全量，自动路由）
   2  按批注汇总（模板+源文件，自动路由）
-  0  返回
-----------------------
-"""
-
-SURVEY_MENU = """
------- 调研选项统计 ------
-  1  按题目选项比例统计 + 展示版（按 config 中『问卷统计配置』执行）
   0  返回
 ----------------------
 """
@@ -233,29 +228,48 @@ def _print_selected_paths(paths: list[Path], label: str = "已选择文件") -> 
 
 def _pick_files_for_compare() -> tuple[Path | None, list[Path]]:
     """弹文件选择框：先模板，再多选源文件。"""
-    import tkinter as tk
-    from tkinter import filedialog
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    print("→ 请在弹出窗口中选择 [模板文件]")
-    tmpl = filedialog.askopenfilename(
-        title="选择模板文件",
-        filetypes=[("Excel", "*.xlsx *.xlsm *.xls"), ("所有", "*.*")],
-    )
-    if not tmpl:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        print("→ 请在弹出窗口中选择 [模板文件]")
+        tmpl = filedialog.askopenfilename(
+            title="选择模板文件",
+            filetypes=[("Excel", "*.xlsx *.xlsm *.xls"), ("所有", "*.*")],
+        )
+        if not tmpl:
+            root.destroy()
+            return None, []
+        _print_selected_paths([Path(tmpl)], "已选择模板文件")
+        print("→ 请在弹出窗口中选择 [源文件]（可多选）")
+        srcs = filedialog.askopenfilenames(
+            title="选择源文件（可多选）",
+            filetypes=[("Excel", "*.xlsx *.xlsm *.xls"), ("所有", "*.*")],
+        )
         root.destroy()
+        src_paths = [Path(p) for p in srcs]
+        _print_selected_paths(src_paths, "已选择源文件")
+        return Path(tmpl), src_paths
+    except Exception as e:
+        print(f"[提示] 文件弹窗不可用：{e}")
+
+    tmpl_raw = input("模板文件路径（输入 0 取消）> ").strip().strip('"').strip("'")
+    if not tmpl_raw or tmpl_raw == "0":
         return None, []
-    _print_selected_paths([Path(tmpl)], "已选择模板文件")
-    print("→ 请在弹出窗口中选择 [源文件]（可多选）")
-    srcs = filedialog.askopenfilenames(
-        title="选择源文件（可多选）",
-        filetypes=[("Excel", "*.xlsx *.xlsm *.xls"), ("所有", "*.*")],
-    )
-    root.destroy()
-    src_paths = [Path(p) for p in srcs]
-    _print_selected_paths(src_paths, "已选择源文件")
-    return Path(tmpl), src_paths
+    src_raw = input("源文件路径（可用分号分隔多个，输入 0 取消）> ").strip()
+    if not src_raw or src_raw == "0":
+        return None, []
+    tmpl_path = Path(tmpl_raw)
+    src_paths = [
+        Path(item.strip().strip('"').strip("'"))
+        for item in src_raw.replace("；", ";").split(";")
+        if item.strip() and Path(item.strip().strip('"').strip("'")).exists()
+    ]
+    _print_selected_paths([tmpl_path], "已输入模板文件")
+    _print_selected_paths(src_paths, "已输入源文件")
+    return (tmpl_path if tmpl_path.exists() else None), src_paths
 
 
 def _pick_source_files(
@@ -456,8 +470,15 @@ def _pick_archive_paths(title: str) -> list[Path]:
         except Exception as e:
             print(f"[提示] 文件夹弹窗不可用：{e}")
 
-    print("[提示] 已取消选择。")
-    return []
+    raw = input("文件夹路径（输入 0 取消）> ").strip().strip('"').strip("'")
+    if raw in ("", "0"):
+        return []
+    folder = Path(raw)
+    if not folder.is_dir():
+        print(f"[提示] 文件夹不存在: {folder}")
+        return []
+    _print_selected_paths([folder], "已输入文件夹")
+    return [folder]
 
 
 def _pick_archive_target_root() -> Path | None:
@@ -488,15 +509,10 @@ def _pick_archive_target_root() -> Path | None:
 
 
 def _split_sources_for_auto_route(paths: list[Path]) -> tuple[list[Path], list[Path]]:
-    """自动路由：.xls 走 COM；其余走非 COM。"""
-    com_list: list[Path] = []
-    normal_list: list[Path] = []
-    for p in paths:
-        if p.suffix.lower() == ".xls":
-            com_list.append(p)
-        else:
-            normal_list.append(p)
-    return normal_list, com_list
+    """Windows Office 模式走 COM；其他情况使用 Python 实现。"""
+    if _uses_windows_com():
+        return [], list(paths)
+    return list(paths), []
 
 
 def _open_path(path: Path) -> None:
@@ -515,17 +531,20 @@ def _latest_file_in_dir(dir_path: Path) -> Path | None:
 
 
 def _split_print_tasks_for_auto_route(tasks: list[dict]) -> tuple[list[dict], list[dict]]:
-    """打印配置自动路由：.xls 走 COM；其余走非 COM。"""
-    normal_list: list[dict] = []
-    com_list: list[dict] = []
-    for t in tasks:
-        p = t.get("source_wb")
-        suffix = str(getattr(p, "suffix", "")).lower() if p is not None else ""
-        if suffix == ".xls":
-            com_list.append(t)
-        else:
-            normal_list.append(t)
-    return normal_list, com_list
+    """Windows Office 模式走 COM；其他情况使用 Python 实现。"""
+    if _uses_windows_com():
+        return [], list(tasks)
+    return list(tasks), []
+
+
+def _uses_windows_com() -> bool:
+    return ENGINE_MODE == "office" and sys.platform == "win32"
+
+
+def _select_engine_mode() -> str:
+    if ENGINE_MODE in {"office", "python"}:
+        return ENGINE_MODE
+    return "office"
 
 
 def _show_main_menu() -> str:
@@ -553,19 +572,26 @@ def _show_sub_menu(title: str, valid: tuple[str, ...]) -> str:
 
 
 def _pick_one_workbook(title: str) -> Path | None:
-    import tkinter as tk
-    from tkinter import filedialog
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    p = filedialog.askopenfilename(
-        title=title,
-        filetypes=[("Excel", "*.xlsx *.xlsm *.xls"), ("所有", "*.*")],
-    )
-    root.destroy()
-    if not p:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        p = filedialog.askopenfilename(
+            title=title,
+            filetypes=[("Excel", "*.xlsx *.xlsm *.xls"), ("所有", "*.*")],
+        )
+        root.destroy()
+    except Exception as e:
+        print(f"[提示] 文件弹窗不可用：{e}")
+        p = input("Excel 文件路径（输入 0 取消）> ").strip().strip('"').strip("'")
+    if not p or p == "0":
         return None
     picked = Path(p)
+    if not picked.exists():
+        print(f"[提示] 文件不存在: {picked}")
+        return None
     _print_selected_paths([picked], "已选择文件")
     return picked
 
@@ -732,7 +758,7 @@ def dispatch(choice: str) -> None:
             print("[已取消]")
             return
         normal_srcs, com_srcs = _split_sources_for_auto_route(srcs)
-        print(f"→ 自动路由：非COM={len(normal_srcs)}，COM(.xls)={len(com_srcs)}")
+        print(f"→ 引擎路由：Python={len(normal_srcs)}，COM={len(com_srcs)}")
         out_normal = None
         out_com = None
         if normal_srcs:
@@ -746,7 +772,7 @@ def dispatch(choice: str) -> None:
             print("[完成] 无匹配结果，未生成文件")
         else:
             if out_normal is not None:
-                print(f"[完成] 非COM输出: {out_normal}")
+                print(f"[完成] Python输出: {out_normal}")
             if out_com is not None:
                 print(f"[完成] COM输出: {out_com}")
     elif choice == "2com":
@@ -755,12 +781,12 @@ def dispatch(choice: str) -> None:
         if not rules:
             print("[无启用的时序提取规则]")
             return
-        srcs = _pick_source_files("选择时序提取源文件（自动路由：xls走COM，其它走非COM）")
+        srcs = _pick_source_files("选择时序提取源文件（按运行模式选择引擎）")
         if not srcs:
             print("[已取消]")
             return
         normal_srcs, com_srcs = _split_sources_for_auto_route(srcs)
-        print(f"→ 自动路由：非COM={len(normal_srcs)}，COM(.xls)={len(com_srcs)}")
+        print(f"→ 引擎路由：Python={len(normal_srcs)}，COM={len(com_srcs)}")
         out_normal = None
         out_com = None
         if normal_srcs:
@@ -774,7 +800,7 @@ def dispatch(choice: str) -> None:
             print("[完成] 无匹配结果，未生成文件")
         else:
             if out_normal is not None:
-                print(f"[完成] 非COM输出: {out_normal}")
+                print(f"[完成] Python输出: {out_normal}")
             if out_com is not None:
                 print(f"[完成] COM输出: {out_com}")
     elif choice in ("3com", "4com"):
@@ -784,7 +810,7 @@ def dispatch(choice: str) -> None:
             print("[无启用的时序提取规则]")
             return
         srcs = _pick_source_files_or_folders(
-            "选择宽表汇总源文件或文件夹（xls 自动走 COM）",
+            "选择宽表汇总源文件或文件夹（按运行模式选择引擎）",
             filetypes=[("Excel", "*.xls *.xlsx *.xlsm")],
             suffixes={".xls", ".xlsx", ".xlsm"},
         )
@@ -793,7 +819,7 @@ def dispatch(choice: str) -> None:
             return
         suffix = (choice == "3com")
         normal_srcs, com_srcs = _split_sources_for_auto_route(srcs)
-        print(f"→ 自动路由：非COM={len(normal_srcs)}，COM(.xls)={len(com_srcs)}")
+        print(f"→ 引擎路由：Python={len(normal_srcs)}，COM={len(com_srcs)}")
         out_normal = None
         out_com = None
         if normal_srcs:
@@ -811,7 +837,7 @@ def dispatch(choice: str) -> None:
             print("[完成] 无匹配结果，未生成文件")
         else:
             if out_normal is not None:
-                print(f"[完成] 非COM输出: {out_normal}")
+                print(f"[完成] Python输出: {out_normal}")
             if out_com is not None:
                 print(f"[完成] COM输出: {out_com}")
     elif choice == "2":
@@ -932,18 +958,18 @@ def dispatch(choice: str) -> None:
         stat = run_print_config_precheck(tasks, g.log_dir)
         print(f"[完成] 预校验 OK={stat['ok']} WARN={stat['warn']} FAIL={stat['fail']}")
     elif choice == "p1com":
-        srcs = _pick_source_files("选择 [COM] 按批注打印（保留源格式）源文件（可多选）")
+        srcs = _pick_source_files("选择 按批注打印（保留源格式）源文件（可多选）")
         if not srcs:
             print("[已取消]")
             return
         normal_srcs, com_srcs = _split_sources_for_auto_route(srcs)
-        print(f"→ 自动路由：非COM={len(normal_srcs)}，COM(.xls)={len(com_srcs)}")
+        print(f"→ 引擎路由：Python={len(normal_srcs)}，COM={len(com_srcs)}")
         if normal_srcs:
             stat = run_print_keep_by_comment(
                 normal_srcs, g.output_dir, g.log_dir, hide_zero=hide_zero_global
             )
             print(
-                f"[完成] 非COM 命中工作簿={stat['workbooks_hit']} 命中sheet={stat['sheets_hit']} "
+                f"[完成] Python 命中工作簿={stat['workbooks_hit']} 命中sheet={stat['sheets_hit']} "
                 f"输出文件={stat['saved_files']} 跳过={stat['skipped']}"
             )
         if com_srcs:
@@ -958,18 +984,18 @@ def dispatch(choice: str) -> None:
             except RuntimeError as e:
                 print(f"[COM 不可用] {e}")
     elif choice == "p3com":
-        srcs = _pick_source_files("选择 [COM] 按批注打印（快速复制）源文件（可多选）")
+        srcs = _pick_source_files("选择 按批注打印（快速复制）源文件（可多选）")
         if not srcs:
             print("[已取消]")
             return
         normal_srcs, com_srcs = _split_sources_for_auto_route(srcs)
-        print(f"→ 自动路由：非COM={len(normal_srcs)}，COM(.xls)={len(com_srcs)}")
+        print(f"→ 引擎路由：Python={len(normal_srcs)}，COM={len(com_srcs)}")
         if normal_srcs:
             stat = run_print_fast_by_comment(
                 normal_srcs, g.output_dir, g.log_dir, hide_zero=hide_zero_global
             )
             print(
-                f"[完成] 非COM 命中工作簿={stat['workbooks_hit']} 命中sheet={stat['sheets_hit']} "
+                f"[完成] Python 命中工作簿={stat['workbooks_hit']} 命中sheet={stat['sheets_hit']} "
                 f"输出文件={stat['saved_files']} 跳过={stat['skipped']}"
             )
         if com_srcs:
@@ -986,11 +1012,11 @@ def dispatch(choice: str) -> None:
     elif choice == "p7com":
         tasks = load_print_tasks(CFG_PATH)
         normal_tasks, com_tasks = _split_print_tasks_for_auto_route(tasks)
-        print(f"→ 自动路由：非COM任务={len(normal_tasks)}，COM任务(.xls)={len(com_tasks)}")
+        print(f"→ 引擎路由：Python任务={len(normal_tasks)}，COM任务={len(com_tasks)}")
         if normal_tasks:
             stat = run_print_config_all_modes(normal_tasks, g.log_dir)
             print(
-                f"[完成] 非COM 任务成功={stat['task_ok']} 跳过={stat['task_skip']} "
+                f"[完成] Python 任务成功={stat['task_ok']} 跳过={stat['task_skip']} "
                 f"写入sheet={stat['written_sheets']} 写入行={stat['written_rows']}"
             )
         if com_tasks:
@@ -1005,12 +1031,12 @@ def dispatch(choice: str) -> None:
     elif choice == "ppdf":
         tasks = load_print_tasks(CFG_PATH)
         normal_tasks, com_tasks = _split_print_tasks_for_auto_route(tasks)
-        print(f"→ 自动路由：非COM任务={len(normal_tasks)}，COM任务(.xls)={len(com_tasks)}")
+        print(f"→ 引擎路由：Python任务={len(normal_tasks)}，COM任务={len(com_tasks)}")
         if normal_tasks:
-            print("[提示] 非COM任务不支持直接导出PDF，已按非COM常规打印执行。")
+            print("[提示] Python 任务不支持直接导出 PDF，已按 Python 常规打印执行。")
             stat = run_print_config_all_modes(normal_tasks, g.log_dir)
             print(
-                f"[完成] 非COM 任务成功={stat['task_ok']} 跳过={stat['task_skip']} "
+                f"[完成] Python 任务成功={stat['task_ok']} 跳过={stat['task_skip']} "
                 f"写入sheet={stat['written_sheets']} 写入行={stat['written_rows']}"
             )
         if com_tasks:
@@ -1082,18 +1108,18 @@ def dispatch(choice: str) -> None:
         print(f"[完成] 工作簿={stat['workbooks']} 重命名={stat['rename_ok']} 跳过={stat['skip']}")
     elif choice == "t7com":
         srcs = _pick_source_files_or_folders(
-            "选择 [COM] 要批量修改 Sheet 名的工作簿或文件夹",
+            "选择 要批量修改 Sheet 名的工作簿或文件夹",
             filetypes=[("Excel", "*.xls *.xlsx *.xlsm")], suffixes={".xls", ".xlsx", ".xlsm"},
         )
         if not srcs:
             print("[已取消]")
             return
         normal_srcs, com_srcs = _split_sources_for_auto_route(srcs)
-        print(f"→ 自动路由：非COM={len(normal_srcs)}，COM(.xls)={len(com_srcs)}")
+        print(f"→ 引擎路由：Python={len(normal_srcs)}，COM={len(com_srcs)}")
         if normal_srcs:
             stat = run_batch_rename_sheet_37(CFG_PATH, normal_srcs, g.log_dir)
             print(
-                f"[完成] 非COM 工作簿={stat['workbooks']} "
+                f"[完成] Python 工作簿={stat['workbooks']} "
                 f"重命名={stat['rename_ok']} 跳过={stat['skip']}"
             )
         if com_srcs:
@@ -1266,18 +1292,18 @@ def dispatch(choice: str) -> None:
         else:
             print(f"[完成] 行数={stat['rows']} 输出={stat['path']}")
     elif choice == "s21com":
-        srcs = _pick_source_files("选择 [COM] 按使用区域汇总的源文件（可多选）")
+        srcs = _pick_source_files("选择 按使用区域汇总的源文件（可多选）")
         if not srcs:
             print("[已取消]")
             return
         normal_srcs, com_srcs = _split_sources_for_auto_route(srcs)
-        print(f"→ 自动路由：非COM={len(normal_srcs)}，COM(.xls)={len(com_srcs)}")
+        print(f"→ 引擎路由：Python={len(normal_srcs)}，COM={len(com_srcs)}")
         if normal_srcs:
             stat = run_summary_by_usedrange(normal_srcs, g.output_dir, g.log_dir)
             if not stat.get("saved"):
-                print("[完成] 非COM 无可汇总数据，未生成文件")
+                print("[完成] Python 无可汇总数据，未生成文件")
             else:
-                print(f"[完成] 非COM 行数={stat['rows']} 输出={stat['path']}")
+                print(f"[完成] Python 行数={stat['rows']} 输出={stat['path']}")
         if com_srcs:
             try:
                 stat = run_summary_by_usedrange_com(com_srcs, g.output_dir, g.log_dir)
@@ -1288,22 +1314,22 @@ def dispatch(choice: str) -> None:
             except RuntimeError as e:
                 print(f"[COM 不可用] {e}")
     elif choice == "s22com":
-        tmpl = _pick_one_workbook("选择 [COM] 批注汇总模板文件")
+        tmpl = _pick_one_workbook("选择 批注汇总模板文件")
         if not tmpl:
             print("[已取消]")
             return
-        srcs = _pick_source_files("选择 [COM] 按批注汇总的源文件（可多选）")
+        srcs = _pick_source_files("选择 按批注汇总的源文件（可多选）")
         if not srcs:
             print("[已取消]")
             return
         normal_srcs, com_srcs = _split_sources_for_auto_route(srcs)
-        print(f"→ 自动路由：非COM={len(normal_srcs)}，COM(.xls)={len(com_srcs)}")
+        print(f"→ 引擎路由：Python={len(normal_srcs)}，COM={len(com_srcs)}")
         if normal_srcs:
             stat = run_summary_by_comment(tmpl, normal_srcs, g.output_dir, g.log_dir)
             if not stat.get("saved"):
-                print("[完成] 非COM 无可汇总数据，未生成文件")
+                print("[完成] Python 无可汇总数据，未生成文件")
             else:
-                print(f"[完成] 非COM 行数={stat['rows']} 输出={stat['path']}")
+                print(f"[完成] Python 行数={stat['rows']} 输出={stat['path']}")
         if com_srcs:
             try:
                 stat = run_summary_by_comment_com(tmpl, com_srcs, g.output_dir, g.log_dir)
@@ -1324,25 +1350,6 @@ def dispatch(choice: str) -> None:
                         print(f"  - {s}")
             except RuntimeError as e:
                 print(f"[COM 不可用] {e}")
-    elif choice == "sv1":
-        src = _pick_one_workbook("选择问卷汇总输入文件（通常是 3.2.2 按批注汇总输出）")
-        if not src:
-            print("[已取消]")
-            return
-        try:
-            stat = run_survey_stats(src, CFG_PATH, g.log_dir)
-        except Exception as e:
-            print(f"[运行失败] {e}")
-            return
-        if not stat.get("saved"):
-            print("[完成] 未识别到任何题目，未生成文件")
-        else:
-            print(
-                f"[完成] 题数={stat['questions']} 样本机构数={stat['sample']} "
-                f"重命名命中/未命中={stat['rename_hits']}/{stat['rename_miss']}\n"
-                f"  明细：{stat['detail']}\n"
-                f"  展示：{stat['show']}"
-            )
     elif choice == "x11":
         print("→ 第一次文件选择：选择 本期商业银行共享一批")
         curr = _pick_one_workbook("选择 本期商业银行共享一批")
@@ -1360,25 +1367,19 @@ def dispatch(choice: str) -> None:
             print("[已取消]")
             return
         normal_srcs, com_srcs = _split_sources_for_auto_route(srcs)
-        print(f"→ 自动路由：非COM={len(normal_srcs)}，COM(.xls)={len(com_srcs)}")
-        normal_curr = curr if curr.suffix.lower() != ".xls" else None
-        normal_prev = prev if prev.suffix.lower() != ".xls" else None
-        com_curr = curr if curr.suffix.lower() == ".xls" else None
-        com_prev = prev if prev.suffix.lower() == ".xls" else None
-        if com_srcs and (com_curr is None or com_prev is None):
-            print("[提示] 目标含 .xls，但本期/上期不是 .xls，COM 分支跳过。")
+        print(f"→ 引擎路由：Python={len(normal_srcs)}，COM={len(com_srcs)}")
         if normal_srcs:
             stat = run_split_village_bank(curr, prev, normal_srcs, g.log_dir)
             if stat.get("matrix_empty"):
-                print("[已中止] 非COM 村镇银行计算结果为空")
+                print("[已中止] Python 村镇银行计算结果为空")
             else:
                 print(
-                    f"[完成] 非COM 文件={stat['files']} 分机构sheet={stat['branch_sheets']} "
+                    f"[完成] Python 文件={stat['files']} 分机构sheet={stat['branch_sheets']} "
                     f"填入={stat['filled_sheets']} 跳过={stat['skipped_sheets']} 失败={stat['failed_files']}"
                 )
-        if com_srcs and com_curr is not None and com_prev is not None:
+        if com_srcs:
             try:
-                stat = run_split_village_bank_com(com_curr, com_prev, com_srcs, g.log_dir)
+                stat = run_split_village_bank_com(curr, prev, srcs, g.log_dir)
                 if stat.get("matrix_empty"):
                     print("[已中止] COM 村镇银行计算结果为空")
                 else:
@@ -1398,11 +1399,11 @@ def dispatch(choice: str) -> None:
             print("[已取消]")
             return
         normal_srcs, com_srcs = _split_sources_for_auto_route(srcs)
-        print(f"→ 自动路由：非COM={len(normal_srcs)}，COM(.xls)={len(com_srcs)}")
+        print(f"→ 引擎路由：Python={len(normal_srcs)}，COM={len(com_srcs)}")
         if normal_srcs:
             stat = run_normalize_institution(normal_srcs, mapping, g.log_dir)
             print(
-                f"[完成] 非COM 文件={stat['files']} 分机构sheet={stat['branch_sheets']} "
+                f"[完成] Python 文件={stat['files']} 分机构sheet={stat['branch_sheets']} "
                 f"命中sheet={stat['mapped_sheets']} 修改行={stat['mapped_rows']} "
                 f"失败={stat['failed_files']}"
             )
@@ -1427,11 +1428,11 @@ def dispatch(choice: str) -> None:
             print("[已取消]")
             return
         normal_srcs, com_srcs = _split_sources_for_auto_route(srcs)
-        print(f"→ 自动路由：非COM={len(normal_srcs)}，COM(.xls)={len(com_srcs)}")
+        print(f"→ 引擎路由：Python={len(normal_srcs)}，COM={len(com_srcs)}")
         if normal_srcs:
             stat = run_remove_foreign_bank(normal_srcs, foreign_set, g.log_dir)
             print(
-                f"[完成] 非COM 文件={stat['files']} 成功={stat['ok_files']} "
+                f"[完成] Python 文件={stat['files']} 成功={stat['ok_files']} "
                 f"分机构sheet={stat['branch_sheets']} 删除行={stat['deleted_rows']} "
                 f"失败={stat['failed_files']}"
             )
@@ -1462,11 +1463,11 @@ def dispatch(choice: str) -> None:
             print("[已取消]")
             return
         normal_srcs, com_srcs = _split_sources_for_auto_route(srcs)
-        print(f"→ 自动路由：非COM={len(normal_srcs)}，COM(.xls)={len(com_srcs)}")
+        print(f"→ 引擎路由：Python={len(normal_srcs)}，COM={len(com_srcs)}")
         if normal_srcs:
             stat = run_region_sum_check(normal_srcs, g.output_dir, g.log_dir)
             print(
-                f"[完成] 非COM 文件={stat['files']} 工作表={stat['sheets']} "
+                f"[完成] Python 文件={stat['files']} 工作表={stat['sheets']} "
                 f"错误={stat['errors']} 失败={stat['failed_files']} 输出={stat['path']}"
             )
         if com_srcs:
@@ -1495,16 +1496,16 @@ def dispatch(choice: str) -> None:
         for p in stat["paths"]:
             print(f"  -> {p}")
     elif choice == "x14com":
-        srcs = _pick_source_files("选择 [COM] 要修改外汇页眉的Excel文件（可多选）")
+        srcs = _pick_source_files("选择 要修改外汇页眉的Excel文件（可多选）")
         if not srcs:
             print("[已取消]")
             return
         normal_srcs, com_srcs = _split_sources_for_auto_route(srcs)
-        print(f"→ 自动路由：非COM={len(normal_srcs)}，COM(.xls)={len(com_srcs)}")
+        print(f"→ 引擎路由：Python={len(normal_srcs)}，COM={len(com_srcs)}")
         if normal_srcs:
             stat = run_fx_header_fix(normal_srcs, g.log_dir)
             print(
-                f"[完成] 非COM 文件={stat['files']} 保存={stat['saved_files']} "
+                f"[完成] Python 文件={stat['files']} 保存={stat['saved_files']} "
                 f"外汇sheet={stat['fx_sheets']} 修改sheet={stat['modified_sheets']} "
                 f"失败={stat['failed_files']}"
             )
@@ -1523,12 +1524,12 @@ def dispatch(choice: str) -> None:
         if not tasks:
             print("[已中止] '工作表提取'配置无启用任务")
             return
-        srcs = _pick_source_files("选择 [COM] 要提取的源文件（可多选）")
+        srcs = _pick_source_files("选择 要提取的源文件（可多选）")
         if not srcs:
             print("[已取消]")
             return
         normal_srcs, com_srcs = _split_sources_for_auto_route(srcs)
-        print(f"→ 自动路由：非COM={len(normal_srcs)}，COM(.xls)={len(com_srcs)}")
+        print(f"→ 引擎路由：Python={len(normal_srcs)}，COM={len(com_srcs)}")
         default_output_name = f"提取结果_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         if normal_srcs:
             stat = run_extract_sheets(
@@ -1536,7 +1537,7 @@ def dispatch(choice: str) -> None:
                 default_output_name=default_output_name,
             )
             print(
-                f"[完成] 非COM 源文件={stat['files']} 提取sheet={stat['extracted_sheets']} "
+                f"[完成] Python 源文件={stat['files']} 提取sheet={stat['extracted_sheets']} "
                 f"输出文件={stat['output_files']} 失败={stat['failed_files']}"
             )
             for p in stat["paths"]:
@@ -1568,9 +1569,9 @@ def dispatch(choice: str) -> None:
             print("[已取消]")
             return
         normal_files, com_files = _split_sources_for_auto_route([cur, prev])
-        print(f"→ 自动路由：非COM={len(normal_files)}，COM(.xls)={len(com_files)}")
+        print(f"→ 引擎路由：Python={len(normal_files)}，COM={len(com_files)}")
         try:
-            if cur.suffix.lower() == ".xls" or prev.suffix.lower() == ".xls":
+            if com_files:
                 r = run_adjust_rural_loan_com(cur, prev, g.log_dir)
             else:
                 r = run_adjust_rural_loan(cur, prev, g.log_dir)
@@ -1601,9 +1602,9 @@ def dispatch(choice: str) -> None:
             print("[已取消]")
             return
         normal_files, com_files = _split_sources_for_auto_route([cur, prev])
-        print(f"→ 自动路由：非COM={len(normal_files)}，COM(.xls)={len(com_files)}")
+        print(f"→ 引擎路由：Python={len(normal_files)}，COM={len(com_files)}")
         try:
-            if cur.suffix.lower() == ".xls" or prev.suffix.lower() == ".xls":
+            if com_files:
                 r = run_adjust_rural_loan_quarterly_com(cur, prev, g.log_dir)
             else:
                 r = run_adjust_rural_loan_quarterly(cur, prev, g.log_dir)
@@ -1648,6 +1649,19 @@ def dispatch(choice: str) -> None:
 
 
 def main() -> None:
+    global ENGINE_MODE
+    ENGINE_MODE = _select_engine_mode()
+    os.environ["PYTOOLS_MODE"] = ENGINE_MODE
+    if ENGINE_MODE == "office":
+        if sys.platform == "win32":
+            print("当前模式：Office（表格功能按支持情况使用 Excel/WPS COM）。")
+        elif sys.platform.startswith("linux"):
+            print("当前模式：Office（Excel/Word 格式转换使用 LibreOffice；其他工具使用其 Python 实现）。")
+            print("需要转换格式时请安装 LibreOffice Calc/Writer。")
+        else:
+            print("当前模式：Office（此系统没有 COM/LibreOffice 适配，工具使用 Python 实现）。")
+    else:
+        print("当前模式：非 Office（所有功能只使用 Python 库；部分旧格式或 Word 转换不支持）。")
     while True:
         main_choice = _show_main_menu()
         if main_choice == "0":
@@ -1673,8 +1687,16 @@ def main() -> None:
                 "4": "p8", "5": "ppdf",
             }[sub]
         elif main_choice == "4":
-            sub = _show_sub_menu(CONVERT_MENU, ("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "0"))
+            sub = _show_sub_menu(CONVERT_MENU, ("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "0"))
             if sub == "0":
+                continue
+            if sub == "11":
+                if ENGINE_MODE != "python":
+                    ENGINE_MODE = "python"
+                    os.environ["PYTOOLS_MODE"] = ENGINE_MODE
+                    print("已切换到非 Office 模式：本次运行不调用 COM 或 LibreOffice，部分旧格式和 Word 转换不可用。")
+                else:
+                    print("当前已经是非 Office 模式：本次运行不调用 COM 或 LibreOffice，部分旧格式和 Word 转换不可用。")
                 continue
             mapped = {
                 "1": "t3", "2": "t4", "3": "t5", "4": "t7com",

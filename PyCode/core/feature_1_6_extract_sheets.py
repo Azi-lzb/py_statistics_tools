@@ -385,12 +385,17 @@ def _copy_full_sheet_with_style(ws_src, ws_out) -> bool:
     if max_r == 0 or max_c == 0:
         return False
 
+    has_content = False
     for r in range(1, max_r + 1):
         for c in range(1, max_c + 1):
             src_cell = ws_src.cell(row=r, column=c)
+            if src_cell.value is not None:
+                has_content = True
             dst_cell = ws_out.cell(row=r, column=c, value=src_cell.value)
             if src_cell.has_style:
-                dst_cell._style = copy(src_cell._style)
+                dst_cell.font = copy(src_cell.font)
+                dst_cell.fill = copy(src_cell.fill)
+                dst_cell.border = copy(src_cell.border)
             if src_cell.number_format is not None:
                 dst_cell.number_format = src_cell.number_format
             if src_cell.protection is not None:
@@ -410,7 +415,7 @@ def _copy_full_sheet_with_style(ws_src, ws_out) -> bool:
 
     for merged in ws_src.merged_cells.ranges:
         ws_out.merge_cells(str(merged))
-    return True
+    return has_content
 
 
 def _remove_default_blank(wb) -> None:
@@ -502,6 +507,12 @@ def run_extract_sheets(target_wbs: Iterable[Path], tasks: list[dict],
 
     for path, wb_out in out_wbs.items():
         _remove_default_blank(wb_out)
+        if (len(wb_out.worksheets) == 1
+                and wb_out.active.max_row == 1
+                and wb_out.active.max_column == 1
+                and wb_out.active.cell(1, 1).value is None):
+            wb_out.close()
+            continue
         path.parent.mkdir(parents=True, exist_ok=True)
         wb_out.save(path)
         wb_out.close()

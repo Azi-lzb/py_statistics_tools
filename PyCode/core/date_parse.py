@@ -44,6 +44,8 @@ def normalize_data_date_value(value) -> date | None:
         result = _normalize_date(y, mo, d)
         if result:
             return result
+        if kind == "ymd":
+            break
     return None
 
 
@@ -58,6 +60,8 @@ def parse_data_date(source_file: str, sheet_a1: str | None = None) -> tuple[str,
             r = _normalize_date(y, mo, d)
             if r:
                 return r.isoformat(), "文件名"
+            if kind == "ymd":
+                break
     if sheet_a1:
         for pat, kind in _PATTERNS:
             m = pat.search(str(sheet_a1))
@@ -68,4 +72,6 @@ def parse_data_date(source_file: str, sheet_a1: str | None = None) -> tuple[str,
                 r = _normalize_date(y, mo, d)
                 if r:
                     return r.isoformat(), "A1"
+                if kind == "ymd":
+                    break
     return "", ""

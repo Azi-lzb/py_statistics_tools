@@ -106,51 +106,53 @@ def run_split_village_bank_com(current_wb: Path, prev_wb: Path,
     app = start_excel_app()
     cur = prev = None
     try:
-        cur = app.Workbooks.Open(str(current_wb.resolve()), ReadOnly=True, UpdateLinks=0)
-        prev = app.Workbooks.Open(str(prev_wb.resolve()), ReadOnly=True, UpdateLinks=0)
-        matrix = _compute_matrix_com(cur, prev)
-    finally:
-        safe_close(prev)
-        safe_close(cur)
-
-    if all(matrix[0][i] in (0, None) for i in (0, 4)):
-        total["matrix_empty"] = True
-        return total
-
-    for path in target_wbs:
-        wb = None
         try:
-            wb = app.Workbooks.Open(str(path.resolve()), ReadOnly=False, UpdateLinks=0)
-            stat = {"branch_sheets": 0, "filled_sheets": 0, "skipped_sheets": 0}
-            for ws in wb.Worksheets:
-                title = str(ws.Name)
-                if "分机构" not in title:
-                    continue
-                stat["branch_sheets"] += 1
-                t = _sheet_type(title)
-                if t is None:
-                    stat["skipped_sheets"] += 1
-                    continue
-                row = _find_village_row(ws)
-                if row is None:
-                    stat["skipped_sheets"] += 1
-                    continue
-                ws.Rows(row).Delete()
-                ws.Rows(row).Insert()
-                ws.Rows(row).Insert()
-                ws.Cells(row, 1).Value = SPLIT_ROW_1_NAME
-                ws.Cells(row + 1, 1).Value = SPLIT_ROW_2_NAME
-                _fill(ws, row, matrix, t)
-                stat["filled_sheets"] += 1
-            wb.Save()
-            total["files"] += 1
-            for k in ("branch_sheets", "filled_sheets", "skipped_sheets"):
-                total[k] += stat[k]
-        except Exception as e:
-            total["failed_files"] += 1
-            logger.error(f"文件失败: {path} - {e}")
+            cur = app.Workbooks.Open(str(current_wb.resolve()), ReadOnly=True, UpdateLinks=0)
+            prev = app.Workbooks.Open(str(prev_wb.resolve()), ReadOnly=True, UpdateLinks=0)
+            matrix = _compute_matrix_com(cur, prev)
         finally:
-            safe_close(wb)
-    safe_quit(app)
-    return total
+            safe_close(prev)
+            safe_close(cur)
+
+        if all(matrix[0][i] in (0, None) for i in (0, 4)):
+            total["matrix_empty"] = True
+            return total
+
+        for path in target_wbs:
+            wb = None
+            try:
+                wb = app.Workbooks.Open(str(path.resolve()), ReadOnly=False, UpdateLinks=0)
+                stat = {"branch_sheets": 0, "filled_sheets": 0, "skipped_sheets": 0}
+                for ws in wb.Worksheets:
+                    title = str(ws.Name)
+                    if "分机构" not in title:
+                        continue
+                    stat["branch_sheets"] += 1
+                    t = _sheet_type(title)
+                    if t is None:
+                        stat["skipped_sheets"] += 1
+                        continue
+                    row = _find_village_row(ws)
+                    if row is None:
+                        stat["skipped_sheets"] += 1
+                        continue
+                    ws.Rows(row).Delete()
+                    ws.Rows(row).Insert()
+                    ws.Rows(row).Insert()
+                    ws.Cells(row, 1).Value = SPLIT_ROW_1_NAME
+                    ws.Cells(row + 1, 1).Value = SPLIT_ROW_2_NAME
+                    _fill(ws, row, matrix, t)
+                    stat["filled_sheets"] += 1
+                wb.Save()
+                total["files"] += 1
+                for k in ("branch_sheets", "filled_sheets", "skipped_sheets"):
+                    total[k] += stat[k]
+            except Exception as e:
+                total["failed_files"] += 1
+                logger.error(f"文件失败: {path} - {e}")
+            finally:
+                safe_close(wb)
+        return total
+    finally:
+        safe_quit(app)
 

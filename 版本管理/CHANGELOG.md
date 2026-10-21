@@ -2,6 +2,14 @@
 
 所有对外可见的变更记录在此文件。版本号遵循 `版本管理/VERSION_MANIFEST.json` 中的 scheme。
 
+## V1.2.0 — 2026-10-21
+
+新增功能（MINOR）。
+
+- 新增 Office / 非 Office 运行模式：Windows Office 模式使用 Excel/WPS COM，Linux Office 模式用 LibreOffice 执行 Excel/Word 格式转换；非 Office 模式只使用 Python 库。
+- 新增 Linux amd64/arm64 `.deb` 打包入口，使用独立 CPython 运行时，并在构建时审计 GLIBC/GLIBCXX 符号版本；麒麟 V10 SP1 目标基线为 GLIBC 2.28 / GLIBCXX 3.4.24。
+- Linux 用户配置存放于 XDG 配置目录；非 Office Excel 格式转换支持导出 `.xlsx` 和 `.csv`。
+
 ## V1.1.0 — 2026-10-12
 
 新增功能（MINOR）。

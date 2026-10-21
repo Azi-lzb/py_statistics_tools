@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`pytools` is an interactive CLI tool for Excel/WPS report batch processing (banking report workflows). It exposes 7 menu groups: 时序工具 / 去重工具 / 打印工具 / 转换工具 / 配置工具 / 汇总工具 / 一二批处理工具 (+ 调研选项统计). All user interaction happens through the menu in `pytools/main.py`; there is no library API.
+`pytools` is an interactive CLI tool for Excel/WPS report batch processing (banking report workflows). It exposes 9 menu groups: 时序工具 / 去重工具 / 打印工具 / 转换工具 / 配置工具 / 汇总工具 / 一二批处理工具 / 归档工具 / 快捷工具. All user interaction happens through the menu in `PyCode/main.py`; there is no library API.
 
 ## Commands
 
@@ -20,7 +20,7 @@ python -m pytest pytools/tests/test_e2e.py::<test_name> -v   # single test
 build_exe.bat
 ```
 
-`build_exe.bat` calls PyInstaller via `pytools.spec` (onefile, console). It auto-`cd`s to its own directory and prefers `%LocalAppData%\Programs\Python\Python310\python.exe`, falling back to `py -3`.
+`build_exe.bat` calls PyInstaller via `pytools.spec` (onefile, console). It auto-`cd`s to its own directory, prefers the project `.venv`, and checks runtime/build dependencies before packaging.
 
 ## Architecture
 

@@ -2,12 +2,14 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+.venv/
 
 # 构建产物
 build/
 .pyinstaller-cache-win7/
 dist/*_2???????_??????.exe
 dist/*.tmp
+dist/linux/
 
 # 运行时输出
 logs/

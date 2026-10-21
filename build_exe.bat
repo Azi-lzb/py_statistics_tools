@@ -2,11 +2,14 @@
 setlocal
 cd /d "%~dp0"
 
+set "PY_EXE_PROJECT=%~dp0.venv\Scripts\python.exe"
 set "PY_EXE_HZPBC=%UserProfile%\miniconda3\envs\HZPBC\python.exe"
 set "PY_EXE=%LocalAppData%\Programs\Python\Python310\python.exe"
 set "PY_CMD="
 
-if exist "%PY_EXE_HZPBC%" (
+if exist "%PY_EXE_PROJECT%" (
+  set "PY_CMD=%PY_EXE_PROJECT%"
+) else if exist "%PY_EXE_HZPBC%" (
   set "PY_CMD=%PY_EXE_HZPBC%"
 ) else if exist "%PY_EXE%" (
   set "PY_CMD=%PY_EXE%"
@@ -15,6 +18,17 @@ if exist "%PY_EXE_HZPBC%" (
   if not errorlevel 1 (
     set "PY_CMD=python"
   )
+)
+
+if defined PY_CMD (
+  "%PY_CMD%" -c "import numpy, pandas, openpyxl, xlrd, pyxlsb, PyInstaller, win32com.client" >nul 2>nul
+) else (
+  py -3 -c "import numpy, pandas, openpyxl, xlrd, pyxlsb, PyInstaller, win32com.client" >nul 2>nul
+)
+if errorlevel 1 (
+  echo [ERROR] Selected Python is missing runtime or build dependencies.
+  echo Run .venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+  exit /b 1
 )
 
 rem Read product version (VERSION_MANIFEST.json is the single source of truth)
@@ -47,6 +61,15 @@ if exist "dist\pytools_prev.tmp" del /q "dist\pytools_prev.tmp" >nul
 if not exist "dist\pytools.exe" (
   echo [WARN] dist\pytools.exe not found
   exit /b 1
+)
+
+if not exist "dist\config\config.xlsx" (
+  if not exist "dist\config" mkdir "dist\config"
+  copy /y "PyCode\config\config.xlsx" "dist\config\config.xlsx" >nul
+  if errorlevel 1 (
+    echo [ERROR] Failed to copy the default config into dist\config\config.xlsx
+    exit /b 1
+  )
 )
 
 set "TS_FILE=%TEMP%\pytools_build_ts.txt"

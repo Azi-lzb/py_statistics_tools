@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=pytools
+Comment=Excel and WPS report batch processing
+Exec=pytools
+Terminal=true
+Categories=Office;Spreadsheet;

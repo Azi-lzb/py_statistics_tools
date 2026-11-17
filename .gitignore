@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 构建产物
+build/
+.pyinstaller-cache-win7/
+dist/*_2???????_??????.exe
+dist/*.tmp
+
+# 运行时输出
+logs/
+dist/logs/
+dist/output/
+output/
+tmp_*/
+
+# 本地杂项
+cache/
+.vscode/
+.pyi_runtime_tmp/
+
+# 本地环境、业务数据与发布产物
+.venv/
+.coverage*
+coverage-*.json
+/xlsx/
+/dist/*.exe
